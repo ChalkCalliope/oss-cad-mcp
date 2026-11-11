@@ -84,6 +84,42 @@ The server speaks stdio by default. A generic client entry looks like:
 Use the equivalent local-MCP entry for your client. The workspace defaults to the
 server's current directory when `OSS_CAD_MCP_WORKSPACE` is not set.
 
+### OpenCode
+
+OpenCode V2 uses `mcp.servers`; register globally with the CLI (recommended) or
+edit `~/.config/opencode/opencode.json`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "oss-cad": {
+        "type": "local",
+        "command": [
+          "/path/to/oss-cad-mcp/.venv/bin/oss-cad-mcp",
+          "serve"
+        ],
+        "environment": {
+          "OSS_CAD_SUITE_ROOT": "/path/to/oss-cad-suite"
+        }
+      }
+    }
+  }
+}
+```
+
+The equivalent CLI registration is:
+
+```sh
+opencode mcp add oss-cad --global \
+  --env OSS_CAD_SUITE_ROOT="$HOME/Kits/oss-cad-suite" \
+  -- /path/to/oss-cad-mcp/.venv/bin/oss-cad-mcp serve
+```
+
+OpenCode starts the server in each workspace, so `cad_status.workspace` follows
+the project being edited. Config changes reload automatically.
+
 ## Updating OSS CAD Suite
 
 OSS CAD Suite publishes daily pre-built releases. The updater downloads the asset
