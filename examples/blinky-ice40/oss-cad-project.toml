@@ -1,0 +1,22 @@
+[project]
+name = "blinky-ice40"
+top = "blinky"
+sources = ["rtl/*.sv"]
+testbenches = ["tb/*.sv"]
+language = "systemverilog"
+std = "1800-2017"
+
+[target]
+board = "icebreaker"
+frequency_mhz = 48
+constraints = ["pins.pcf"]
+
+[sim]
+engine = "auto"
+testbench = "tb_blinky"
+trace = "auto"
+
+[formal]
+engine = "smtbmc"
+depth = 20
+mode = "prove"
