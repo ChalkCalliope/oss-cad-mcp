@@ -38,7 +38,7 @@ WSL2 with the OSS CAD Suite 2026-11-05 release.
 - WSLg is enabled here, so GUI viewers may work, but MCP tools never block on a GUI.
 - USB passthrough is not part of v0.1 because hardware programming is out of scope.
 - `bwrap` sandboxing is unavailable in this WSL2 environment because user namespaces
-  cannot be created. The server reports this via `doctor` and runs unsandboxed.
+  cannot be created. The server reports this via `doctor --deep` and runs unsandboxed.
 
 ## Install
 
@@ -48,6 +48,8 @@ Requirements:
 - [`uv`](https://docs.astral.sh/uv/)
 - OSS CAD Suite extracted somewhere, for example `~/Kits/oss-cad-suite`
 - A host C++ compiler and `make` for Verilator simulation
+- `perl-doc`, required by Verilator's POD-based `--help` output and the catalog
+  help command
 
 ```bash
 git clone <repository> oss-cad-mcp
