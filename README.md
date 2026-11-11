@@ -137,16 +137,28 @@ Lint a SystemVerilog file:
 
 ```python
 # tool: cad_check
-{"request": {"source": {"files": ["rtl/top.sv"], "language": "systemverilog"},
-             "top": "top", "level": "lint", "engines": ["slang", "verilator"]}}
+{
+    "request": {
+        "source": {"files": ["rtl/top.sv"], "language": "systemverilog"},
+        "top": "top",
+        "level": "lint",
+        "engines": ["slang", "verilator"],
+    }
+}
 ```
 
 Simulate a testbench:
 
 ```python
 # tool: cad_simulate
-{"request": {"source": {"files": ["rtl/top.sv", "tb/tb_top.sv"]},
-             "top": "tb_top", "engine": "verilator", "trace": "fst"}}
+{
+    "request": {
+        "source": {"files": ["rtl/top.sv", "tb/tb_top.sv"]},
+        "top": "tb_top",
+        "engine": "verilator",
+        "trace": "fst",
+    }
+}
 ```
 
 Synthesize for iCE40:
@@ -160,17 +172,22 @@ Build an iCEBreaker bitstream (software only):
 
 ```python
 # tool: cad_fpga_build
-{"request": {"source": {"files": ["rtl/top.sv"]}, "top": "top",
-             "board": "icebreaker", "constraints": ["pins.pcf"],
-             "frequency_mhz": 48}}
+{
+    "request": {
+        "source": {"files": ["rtl/top.sv"]},
+        "top": "top",
+        "board": "icebreaker",
+        "constraints": ["pins.pcf"],
+        "frequency_mhz": 48,
+    }
+}
 ```
 
 Prove an assertion testbench:
 
 ```python
 # tool: cad_verify
-{"request": {"mode": "prove", "source": {"files": ["formal/prove.sv"]},
-             "top": "testbench", "depth": 20}}
+{"request": {"mode": "prove", "source": {"files": ["formal/prove.sv"]}, "top": "testbench", "depth": 20}}
 ```
 
 ## Project configuration
