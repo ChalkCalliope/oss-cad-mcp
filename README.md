@@ -121,6 +121,18 @@ the new binaries. To remove the backup after a successful update, pass
 `--no-backup`. To replace a non-empty directory that is not an OSS CAD Suite,
 pass `--force`.
 
+For unattended daily updates, use an explicit absolute path and avoid keeping a
+2.5 GB backup every day:
+
+```cron
+# Daily at 06:00; adjust paths for your machine.
+0 6 * * * $HOME/oss-cad-mcp/scripts/update-oss-cad-suite.sh --no-backup $HOME/Kits/oss-cad-suite >> $HOME/.local/state/oss-cad-suite-update.log 2>&1
+```
+
+Do not run the updater while a synthesis or place-and-route job is active. The
+atomic directory swap is safe on Linux, but running tools may keep the old
+binaries open until the server is restarted.
+
 ## Tool surface
 
 ### Workflows
