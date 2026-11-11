@@ -241,7 +241,6 @@ allow_unsafe = false
 max_jobs = 4
 default_timeout_s = 300
 max_output_bytes = 65536
-include_hardware = false
 ```
 
 Useful commands:

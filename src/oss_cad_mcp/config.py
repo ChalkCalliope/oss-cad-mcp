@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     build_dir: Path | None = None
     data_dir: Path | None = None
     log_level: str = "INFO"
-    include_hardware: bool = False
 
     @field_validator("workspace", "suite_root", "build_dir", "data_dir", mode="before")
     @classmethod

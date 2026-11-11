@@ -120,8 +120,7 @@ def build_status(app: AppContext, *, deep: bool = False) -> StatusReport:
         warnings.append("No C++ compiler found; Verilator simulation is unavailable.")
     if not suite.verified_platform:
         warnings.append("macOS and native Linux are not verified for full support.")
-    if not app.settings.include_hardware:
-        warnings.append("Hardware programming is disabled in v0.1.")
+    warnings.append("Hardware programming is disabled in v0.1.")
     sandbox_available = False
     sandbox_note: str | None = None
     if deep:
@@ -314,7 +313,8 @@ async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
             ),
             summary="GUI tool blocked.",
         )
-    if entry.internal and not request.allow_unsafe:
+    unsafe_allowed = request.allow_unsafe and app.settings.allow_unsafe
+    if entry.internal and not unsafe_allowed:
         return ToolRunReport(
             ok=False,
             tool=entry.name,
@@ -326,7 +326,7 @@ async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
             ),
             summary="Internal tool blocked.",
         )
-    if entry.name == "yosys" and not request.allow_unsafe:
+    if entry.name == "yosys" and not unsafe_allowed:
         joined = " ".join(request.args).lower()
         if any(token in joined for token in (" shell", "exec", "plugin", "read -tcl", "tcl ")):
             return ToolRunReport(
