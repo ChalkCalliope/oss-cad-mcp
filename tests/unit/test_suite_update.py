@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import tarfile
 from pathlib import Path
@@ -7,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from oss_cad_mcp.suite_update import (
+    ReleaseAsset,
     UpdateError,
     detect_platform,
+    download_asset,
     extract_archive,
     find_suite_root,
     install_archive,
@@ -135,6 +138,37 @@ def test_install_without_backup_and_force(tmp_path: Path) -> None:
     )
     assert forced.ok
     assert (non_suite / "VERSION").read_text().strip() == "20261113"
+
+
+def test_download_verifies_digest(tmp_path: Path) -> None:
+    payload = b"fake suite archive bytes"
+    source = tmp_path / "asset.tgz"
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    asset = ReleaseAsset(
+        tag="2026-11-11",
+        name="asset.tgz",
+        platform="linux-x64",
+        version="20261111",
+        url=source.as_uri(),
+        sha256=digest,
+        size_bytes=len(payload),
+    )
+    destination = tmp_path / "download.tgz"
+    result = download_asset(asset, destination, resume=False)
+    assert result.read_bytes() == payload
+
+    bad_asset = ReleaseAsset(
+        tag=asset.tag,
+        name=asset.name,
+        platform=asset.platform,
+        version=asset.version,
+        url=asset.url,
+        sha256="0" * 64,
+        size_bytes=len(payload),
+    )
+    with pytest.raises(UpdateError):
+        download_asset(bad_asset, tmp_path / "bad.tgz", resume=False)
 
 
 def test_normalize_bin_path(tmp_path: Path) -> None:
