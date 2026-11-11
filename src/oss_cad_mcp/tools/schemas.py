@@ -72,6 +72,10 @@ class FpgaBuildRequest(BaseRequest):
     package: str | None = None
     speed: str | None = None
     constraints: list[str] = Field(default_factory=list)
+    allow_unconstrained: bool = Field(
+        default=False,
+        description="Allow an early bring-up build with unconstrained I/O.",
+    )
     frequency_mhz: float | None = Field(default=None, gt=0)
     seed: int | None = None
     placer: str | None = None

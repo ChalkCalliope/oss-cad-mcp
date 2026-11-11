@@ -205,7 +205,8 @@ mode = "prove"
 
 Supported board presets in v0.1 include iCEBreaker, TinyFPGA BX, iCEstick, ULX3S 45F/85F,
 and the ECP5 evaluation board. Presets only supply device/package/speed and frequency;
-users provide pin constraints.
+users provide pin constraints. For early bring-up, `allow_unconstrained=true` passes the
+architecture-specific “allow unconstrained I/O” option to nextpnr.
 
 ## Configuration
 

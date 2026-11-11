@@ -31,6 +31,7 @@ async def run_fpga_build(
     package: str | None = None,
     speed: str | None = None,
     constraints: list[str] | None = None,
+    allow_unconstrained: bool = False,
     frequency_mhz: float | None = None,
     seed: int | None = None,
     placer: str | None = None,
@@ -73,10 +74,10 @@ async def run_fpga_build(
         frequency_mhz = project.target.frequency_mhz if project and project.target.frequency_mhz else 25.0
     constraint_patterns = constraints or (project.target.constraints if project else [])
     constraint_paths = [app.paths.resolve_read(item, must_exist=True) for item in constraint_patterns]
-    if not constraint_paths:
+    if not constraint_paths and not allow_unconstrained:
         raise InvalidInput(
             "A physical constraint file is required for PnR.",
-            hint="Pass constraints=['pins.pcf'] (iCE40) or ['pins.lpf'] (ECP5).",
+            hint="Pass constraints=['pins.pcf'] (iCE40) or ['pins.lpf'] (ECP5), or set allow_unconstrained=true for early bring-up.",
         )
     expected_suffix = ".pcf" if family == "ice40" else ".lpf"
     for path in constraint_paths:
@@ -133,8 +134,6 @@ async def run_fpga_build(
             package or "",
             "--json",
             str(netlist_path),
-            "--pcf",
-            str(constraint_paths[0]),
             "--freq",
             str(frequency_mhz),
             "--asc",
@@ -142,6 +141,10 @@ async def run_fpga_build(
             "--report",
             str(report_path),
         ]
+        if constraint_paths:
+            pnr_args.extend(["--pcf", str(constraint_paths[0])])
+        else:
+            pnr_args.append("--pcf-allow-unconstrained")
         if seed is not None:
             pnr_args.extend(["--seed", str(seed)])
         if placer:
@@ -159,8 +162,6 @@ async def run_fpga_build(
             str(speed or "6"),
             "--json",
             str(netlist_path),
-            "--lpf",
-            str(constraint_paths[0]),
             "--freq",
             str(frequency_mhz),
             "--textcfg",
@@ -168,6 +169,10 @@ async def run_fpga_build(
             "--report",
             str(report_path),
         ]
+        if constraint_paths:
+            pnr_args.extend(["--lpf", str(constraint_paths[0])])
+        else:
+            pnr_args.append("--lpf-allow-unconstrained")
         if seed is not None:
             pnr_args.extend(["--seed", str(seed)])
         if placer:

@@ -134,3 +134,26 @@ async def test_ice40_bitstream_build(app: AppContext) -> None:
     assert report.ok
     assert report.bitstream is not None
     assert report.timing_met is not False
+
+
+@pytest.mark.integration
+async def test_ecp5_unconstrained_bringup_build(app: AppContext) -> None:
+    async def factory(job):
+        return await run_fpga_build(
+            app,
+            job,
+            source=SourceSet(files=["rtl/blinky.sv"], language="systemverilog"),
+            top="blinky",
+            family="ecp5",
+            device="85k",
+            package="CABGA381",
+            speed="6",
+            allow_unconstrained=True,
+            frequency_mhz=25,
+            timeout_s=180,
+        )
+
+    report = await _run(app, "fpga_build", factory)
+    assert report.ok
+    assert report.bitstream is not None
+    assert report.timing is not None

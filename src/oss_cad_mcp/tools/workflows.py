@@ -188,6 +188,7 @@ async def cad_fpga_build(ctx: Context, request: FpgaBuildRequest) -> FpgaBuildRe
             package=request.package,
             speed=request.speed,
             constraints=request.constraints,
+            allow_unconstrained=request.allow_unconstrained,
             frequency_mhz=request.frequency_mhz,
             seed=request.seed,
             placer=request.placer,
