@@ -171,11 +171,22 @@ async def cad_status(ctx: Context, request: StatusRequest) -> StatusReport:
 async def cad_project(ctx: Context, request: ProjectRequest) -> ProjectActionReport:
     """Inspect, initialize, or validate an HDL project."""
     app = get_app(ctx)
-    root = app.paths.resolve_read(request.root, must_exist=True) if request.root else app.workspace
+    try:
+        root = app.paths.resolve_read(request.root, must_exist=True) if request.root else app.workspace
+    except Exception as exc:
+        return ProjectActionReport(
+            ok=False,
+            action=request.action,
+            error=_error(exc),
+            summary=str(exc),
+        )
     try:
         profile = inspect_project(root, paths=app.paths, deep=request.deep)
     except Exception as exc:
-        return ProjectActionReport(ok=False, action=request.action, error=_error(exc), summary=str(exc))
+        error = _error(exc)
+        if error.code == "internal_error" and isinstance(exc, ValueError):
+            error = ErrorInfo(code="invalid_input", message=str(exc))
+        return ProjectActionReport(ok=False, action=request.action, error=error, summary=str(exc))
     if request.action == "inspect":
         return ProjectActionReport(
             ok=True,
@@ -266,12 +277,12 @@ async def cad_tool_search(ctx: Context, request: ToolSearchRequest) -> ToolSearc
         risk=request.risk,
         include_internal=request.include_internal,
         include_hardware=request.include_hardware,
-        limit=request.limit,
+        limit=registry.count(),
     )
     return ToolSearchResult(
         query=request.query,
         total=len(entries),
-        tools=registry.infos(entries),
+        tools=registry.infos(entries[: request.limit]),
     )
 
 

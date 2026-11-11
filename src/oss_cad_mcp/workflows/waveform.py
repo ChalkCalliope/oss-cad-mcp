@@ -203,12 +203,22 @@ async def run_waveform(
             signals=selected,
             signals_truncated=truncated or len(header.vars) > len(selected),
         )
+        if action == "signals":
+            summary = (
+                f"{len(selected)} selected signal(s) of {header.signal_count}, "
+                f"timescale {header.timescale or 'unknown'}, max time {scan_result.max_time}."
+            )
+        else:
+            summary = (
+                f"{header.signal_count} signals, timescale {header.timescale or 'unknown'}, "
+                f"max time {scan_result.max_time}."
+            )
         return WaveformReport(
             ok=True,
             action=action,
             info=info,
             job=job.to_ref(),
-            summary=f"{header.signal_count} signals, timescale {header.timescale or 'unknown'}, max time {scan_result.max_time}.",
+            summary=summary,
         )
 
     scan_result = scan(

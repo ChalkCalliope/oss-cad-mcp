@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from oss_cad_mcp.errors import InvalidInput
 from oss_cad_mcp.exec.paths import PathPolicy
 from oss_cad_mcp.models.common import SourceSet
 from oss_cad_mcp.project import inspect_project, parse_filelist, resolve_sources
@@ -57,6 +60,40 @@ def test_filelist_is_an_explicit_source_set(tmp_path: Path) -> None:
     )
 
     assert [path.name for path in resolved.files] == ["dut.sv"]
+
+
+def test_filelist_missing_entry_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "dut.sv").write_text("module dut; endmodule")
+    filelist = tmp_path / "files.f"
+    filelist.write_text("rtl/dut.sv\nrtl/missing.sv\n")
+
+    with pytest.raises(InvalidInput) as excinfo:
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="systemverilog"),
+            project=None,
+            paths=PathPolicy.create(tmp_path),
+        )
+
+    assert "missing.sv" in str(excinfo.value)
+    assert excinfo.value.details == {"missing": [str((tmp_path / "rtl" / "missing.sv").resolve())]}
+
+
+def test_formal_wrappers_are_not_top_candidates(tmp_path: Path) -> None:
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "formal").mkdir()
+    (tmp_path / "rtl" / "top.v").write_text("module top; endmodule\n", encoding="utf-8")
+    (tmp_path / "formal" / "top_formal.sv").write_text("module top_formal; top dut(); endmodule\n", encoding="utf-8")
+    (tmp_path / "oss-cad-project.toml").write_text(
+        '[project]\ntop = "top"\nsources = ["rtl/**/*.v"]\n',
+        encoding="utf-8",
+    )
+
+    profile = inspect_project(tmp_path, paths=PathPolicy.create(tmp_path))
+
+    assert profile.top_candidates == ["top"]
+    assert profile.formal_files == ["formal/top_formal.sv"]
+    assert profile.source_files == ["rtl/top.v"]
 
 
 def test_vhdl_project_detection(tmp_path: Path) -> None:

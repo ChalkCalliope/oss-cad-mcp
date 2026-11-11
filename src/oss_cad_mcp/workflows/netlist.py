@@ -29,13 +29,20 @@ def _load(path: Path) -> dict[str, Any]:
     return data
 
 
-def _modules(data: dict[str, Any], *, include_internal: bool = False) -> dict[str, Any]:
+def _modules(data: dict[str, Any], *, include_internal: bool = False, include_library: bool = False) -> dict[str, Any]:
     modules = data.get("modules", {})
     if not isinstance(modules, dict):
         return {}
-    if include_internal:
-        return modules
-    return {name: module for name, module in modules.items() if not str(name).startswith("$")}
+    selected: dict[str, Any] = {}
+    for name, module in modules.items():
+        if not include_internal and str(name).startswith("$"):
+            continue
+        if not include_library and isinstance(module, dict):
+            attributes = module.get("attributes", {})
+            if isinstance(attributes, dict) and (attributes.get("blackbox") or attributes.get("whitebox")):
+                continue
+        selected[name] = module
+    return selected
 
 
 def _clean_name(name: str) -> str:
@@ -200,10 +207,11 @@ def inspect_netlist(
     other: str | Path | None = None,
     limit: int = 200,
     include_internal: bool = False,
+    include_library: bool = False,
 ) -> NetlistReport:
     resolved = app.paths.resolve_read(path, must_exist=True)
     data = _load(resolved)
-    modules = _modules(data, include_internal=include_internal)
+    modules = _modules(data, include_internal=include_internal, include_library=include_library)
     counts = _cell_counts(modules)
     base = NetlistReport(
         ok=True,
@@ -237,7 +245,7 @@ def inspect_netlist(
             raise InvalidInput("diff requires other (a second netlist path).")
         other_path = app.paths.resolve_read(other, must_exist=True)
         other_data = _load(other_path)
-        other_modules = _modules(other_data, include_internal=include_internal)
+        other_modules = _modules(other_data, include_internal=include_internal, include_library=include_library)
         other_counts = _cell_counts(other_modules)
         added = {key: value for key, value in counts.items() if key not in other_counts}
         removed = {key: value for key, value in other_counts.items() if key not in counts}

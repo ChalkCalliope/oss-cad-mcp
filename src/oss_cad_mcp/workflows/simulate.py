@@ -9,7 +9,7 @@ from typing import Literal
 
 from oss_cad_mcp.app import AppContext
 from oss_cad_mcp.errors import InvalidInput, PreflightFailed
-from oss_cad_mcp.models.common import SourceSet
+from oss_cad_mcp.models.common import ErrorInfo, SourceSet
 from oss_cad_mcp.models.diagnostics import Diagnostic
 from oss_cad_mcp.models.results import SimulationReport
 from oss_cad_mcp.parsers import ghdl as ghdl_parser
@@ -30,7 +30,10 @@ SimEngine = Literal["auto", "iverilog", "verilator", "ghdl"]
 TraceMode = Literal["auto", "none", "vcd", "fst"]
 
 _FINISH_RE = re.compile(r"\$finish(?:\s+called)?\s+at\s+([0-9.]+)\s*([a-z]*)", re.IGNORECASE)
-_FAIL_RE = re.compile(r"(ASSERTION FAILED|SIMULATION FAILED|%Error:|\$fatal|Fatal:)", re.IGNORECASE)
+_FAIL_RE = re.compile(
+    r"(ASSERTION FAILED|SIMULATION FAILED|TESTBENCH FAILED|TEST FAILED|%Error:|\$fatal|Fatal:)",
+    re.IGNORECASE,
+)
 
 
 def _resolve_top(app: AppContext, project, source: SourceSet | None, top: str | None) -> str:
@@ -274,25 +277,44 @@ async def run_simulate(
     stdout_text = _step_text(job, "simulate", "stdout")
     stderr_text = _step_text(job, "simulate", "stderr")
     combined = stdout_text + "\n" + stderr_text
-    ok = run_result.exit_code == 0 and not _FAIL_RE.search(combined)
-    if expect_fail:
-        ok = not ok
+    timed_out = run_result.timed_out
+    failed = run_result.exit_code not in (0, None) or bool(_FAIL_RE.search(combined))
+    if timed_out:
+        # A timeout is never a passing outcome, even when expect_fail is set.
+        ok = False
+    elif expect_fail:
+        ok = failed
+    else:
+        ok = not failed
     finish = _FINISH_RE.search(combined)
-    finish_reason = finish.group(0) if finish else ("timeout" if run_result.timed_out else None)
+    finish_reason = finish.group(0) if finish else ("timeout" if timed_out else None)
     simulated_time = f"{finish.group(1)} {finish.group(2)}".strip() if finish else None
-    waveform = _find_waveform(job, trace_mode, app)
+    if timed_out:
+        _discard_waveforms(job)
+        warnings.append("Simulation timed out; partial waveform files were discarded.")
+        waveform = None
+    else:
+        waveform = _find_waveform(job, trace_mode, app, warnings=warnings)
     if waveform is not None:
         artifacts.append(waveform)
-    if trace_mode not in {"none", "auto"} and waveform is None:
+    if not timed_out and trace_mode not in {"none", "auto"} and waveform is None:
         warnings.append(f"No {trace_mode.upper()} waveform was found after simulation.")
     summary = f"{engine_label} simulation {'passed' if ok else 'failed'} for top {top} (exit {run_result.exit_code})"
-    if run_result.timed_out:
+    error = None
+    if timed_out:
         summary = f"{engine_label} simulation timed out for top {top}"
+        error = ErrorInfo(
+            code="simulation_timeout",
+            message=f"{engine_label} simulation exceeded timeout_s for top {top}.",
+            hint="Increase timeout_s or make the testbench terminate with $finish/std.env.finish.",
+            retryable=True,
+        )
     return SimulationReport(
         ok=ok,
         engine=engine_label,
         top=top,
         exit_code=run_result.exit_code,
+        timed_out=timed_out,
         finish_reason=finish_reason,
         simulated_time=simulated_time,
         stdout_tail=stdout_text[-16_384:],
@@ -302,6 +324,7 @@ async def run_simulate(
         job=job.to_ref(),
         artifacts=artifacts,
         warnings=warnings,
+        error=error,
         summary=summary,
     )
 
@@ -315,7 +338,7 @@ def _step_text(job, step_name: str, stream: str) -> str:
     return ""
 
 
-def _find_waveform(job, trace_mode: str, app: AppContext):
+def _find_waveform(job, trace_mode: str, app: AppContext, *, warnings: list[str] | None = None):
     if trace_mode == "none":
         return None
     suffixes = {".vcd", ".fst", ".ghw"} if trace_mode == "auto" else {f".{trace_mode}"}
@@ -343,7 +366,26 @@ def _find_waveform(job, trace_mode: str, app: AppContext):
     if not candidates:
         return None
     path = max(candidates, key=lambda item: item.stat().st_mtime)
+    limit = app.settings.max_waveform_bytes
+    if limit and path.stat().st_size > limit:
+        if warnings is not None:
+            warnings.append(
+                f"Waveform {path.name} is {path.stat().st_size} bytes, above max_waveform_bytes={limit}; "
+                "the artifact was not registered. Increase the setting if this is intentional."
+            )
+        return None
     return app.artifacts.register(job, path, kind="waveform", description="Simulation waveform")
+
+
+def _discard_waveforms(job) -> None:
+    """Remove partial waveform files after a timed-out simulation."""
+    for path in job.work_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".vcd", ".fst", ".ghw", ".lxt", ".lxt2", ".vzt"}:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
 
 
 def _simulation_failure(job, engine, top, diagnostics, warnings, exit_code, summary) -> SimulationReport:

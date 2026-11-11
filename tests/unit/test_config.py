@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from oss_cad_mcp.config import Settings, load_settings
+import pytest
+
+from oss_cad_mcp.config import ProjectConfigError, Settings, load_settings
 
 
 def test_settings_paths(tmp_path: Path) -> None:
@@ -19,3 +21,11 @@ def test_toml_and_cli_precedence(tmp_path: Path, monkeypatch) -> None:
     settings = load_settings(config_file=config, profile="full")
     assert settings.workspace == tmp_path / "from-toml"
     assert settings.profile == "full"
+
+
+def test_project_config_error_has_stable_code(tmp_path: Path) -> None:
+    config = tmp_path / "bad.toml"
+    config.write_text("[project\nname = 'broken'\n", encoding="utf-8")
+    with pytest.raises(ProjectConfigError) as excinfo:
+        load_settings(config_file=config)
+    assert excinfo.value.code == "project_config_error"

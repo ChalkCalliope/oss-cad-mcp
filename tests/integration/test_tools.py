@@ -16,8 +16,9 @@ from oss_cad_mcp.tools.schemas import (
     StatusRequest,
     ToolHelpRequest,
     ToolRunRequest,
+    ToolSearchRequest,
 )
-from oss_cad_mcp.tools.system import cad_project, cad_status, cad_tool_help, cad_tool_run
+from oss_cad_mcp.tools.system import cad_project, cad_status, cad_tool_help, cad_tool_run, cad_tool_search
 from oss_cad_mcp.workflows.netlist import inspect_netlist
 from oss_cad_mcp.workflows.synthesize import run_synthesize
 from tests.conftest import make_ctx
@@ -253,3 +254,61 @@ def test_fanout_missing_net_returns_no_matches(app: AppContext) -> None:
         include_internal=True,
     )
     assert with_internal.module_count == 2
+
+
+@pytest.mark.integration
+async def test_project_root_error_is_structured(app: AppContext) -> None:
+    ctx = make_ctx(app)
+    result = await cad_project(ctx, ProjectRequest(action="inspect", root="/"))
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "path_not_allowed"
+
+
+@pytest.mark.integration
+async def test_invalid_project_toml_has_project_config_code(app: AppContext) -> None:
+    (app.workspace / "oss-cad-project.toml").write_text("[project\nname = 'broken'\n", encoding="utf-8")
+    ctx = make_ctx(app)
+    result = await cad_project(ctx, ProjectRequest(action="inspect"))
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "project_config_error"
+
+
+@pytest.mark.integration
+async def test_tool_search_total_is_not_page_limited(app: AppContext) -> None:
+    ctx = make_ctx(app)
+    page = await cad_tool_search(ctx, ToolSearchRequest(family="formal", limit=5))
+    full = await cad_tool_search(ctx, ToolSearchRequest(family="formal", limit=200))
+    assert page.ok
+    assert len(page.tools) == 5
+    assert page.total == full.total
+    assert page.total > len(page.tools)
+
+
+@pytest.mark.integration
+def test_netlist_hides_blackbox_library_modules(app: AppContext) -> None:
+    netlist = app.workspace / "library-netlist.json"
+    netlist.write_text(
+        json.dumps(
+            {
+                "modules": {
+                    "top": {"ports": {}, "cells": {}, "netnames": {}},
+                    "SB_LUT4": {
+                        "attributes": {"blackbox": "00000000000000000000000000000001"},
+                        "ports": {},
+                        "cells": {},
+                        "netnames": {},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    design = inspect_netlist(app, action="stats", path="library-netlist.json")
+    assert design.module_count == 1
+    assert [module.name for module in design.modules] == ["top"]
+
+    library = inspect_netlist(app, action="stats", path="library-netlist.json", include_library=True)
+    assert library.module_count == 2

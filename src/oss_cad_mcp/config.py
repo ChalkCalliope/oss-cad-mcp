@@ -11,6 +11,8 @@ import platformdirs
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from oss_cad_mcp.errors import CadError
+
 
 def default_config_path() -> Path:
     return Path(platformdirs.user_config_dir("oss-cad-mcp")) / "config.toml"
@@ -35,6 +37,7 @@ class Settings(BaseSettings):
     max_output_bytes: int = Field(default=65_536, ge=1_024, le=16_777_216)
     build_dir: Path | None = None
     data_dir: Path | None = None
+    max_waveform_bytes: int = Field(default=268_435_456, ge=0, le=16_777_216_000)
     log_level: str = "INFO"
 
     @field_validator("workspace", "suite_root", "build_dir", "data_dir", mode="before")
@@ -67,8 +70,10 @@ class Settings(BaseSettings):
         return Path(platformdirs.user_cache_dir("oss-cad-mcp"))
 
 
-class ProjectConfigError(ValueError):
+class ProjectConfigError(CadError):
     """Raised when oss-cad-project.toml cannot be parsed."""
+
+    code = "project_config_error"
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

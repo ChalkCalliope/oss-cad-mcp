@@ -100,7 +100,9 @@ async def run_check(
         if engine == "slang":
             diag_path = work_path(job, f"slang-{job.id}.json")
             args = ["--diag-json", str(diag_path), "--std", _std_slang(resolved.std)]
-            if level != "elaborate":
+            if level == "parse":
+                args.insert(0, "--parse-only")
+            elif level != "elaborate":
                 args.insert(0, "--lint-only")
             args.extend(include_args("-I", resolved.include_dirs))
             args.extend(define_args("-D", resolved.defines))
@@ -194,7 +196,8 @@ async def run_check(
         elif engine == "ghdl":
             workdir = work_path(job, "ghdl")
             workdir.mkdir(parents=True, exist_ok=True)
-            args = ["-a", "--std=08", f"--workdir={workdir}", *source_files(resolved)]
+            flag = "-s" if level == "parse" else "-a"
+            args = [flag, "--std=08", f"--workdir={workdir}", *source_files(resolved)]
             result = await run_tool(
                 app, job, name="ghdl", args=args, cwd=app.workspace, timeout_s=timeout_s, step_name="ghdl"
             )

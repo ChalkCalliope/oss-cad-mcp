@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from oss_cad_mcp.config import ProjectConfigError
+from oss_cad_mcp.errors import InvalidInput
 from oss_cad_mcp.exec.paths import PathPolicy
 from oss_cad_mcp.models.common import SourceSet
 from oss_cad_mcp.models.project import (
@@ -47,6 +48,7 @@ _CONSTRAINT_KINDS = {
     ".qsf": ("qsf", None),
 }
 _CONFIG_NAMES = ("oss-cad-project.toml", ".oss-cad-project.toml")
+_FORMAL_DIRS = {"formal", "verif", "verification", "proof", "sby"}
 
 
 def _excluded_path(path: Path, root: Path, excluded: Iterable[str]) -> bool:
@@ -148,6 +150,15 @@ def _testbench_like(name: str, path: Path) -> bool:
     )
 
 
+def _formal_like(name: str, path: Path) -> bool:
+    lowered = name.lower()
+    return (
+        lowered.endswith("_formal")
+        or lowered.endswith("_fv")
+        or any(part.lower() in _FORMAL_DIRS for part in path.parts)
+    )
+
+
 def _clocks(text: str) -> list[str]:
     clocks = re.findall(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)", text)
     clocks.extend(re.findall(r"\balways_ff\s*@\s*\(\s*(?:posedge|negedge)\s+([A-Za-z_]\w*)", text))
@@ -199,12 +210,20 @@ def inspect_project(
     testbenches = {
         name for name, path in units.items() if _testbench_like(name, path) or _testbench_like(path.stem, path)
     }
-    top_candidates = [name for name in units if name not in instantiated and name not in testbenches]
-    if not top_candidates:
-        top_candidates = [name for name in units if name not in testbenches]
+    formal_units = {name for name, path in units.items() if _formal_like(name, path) or _formal_like(path.stem, path)}
+    candidates = [
+        name for name in units if name not in instantiated and name not in testbenches and name not in formal_units
+    ]
+    if not candidates:
+        candidates = [name for name in units if name not in testbenches and name not in formal_units]
+    if config and config.top and config.top in units:
+        candidates = [config.top, *(name for name in candidates if name != config.top)]
+    top_candidates = list(dict.fromkeys(candidates))
     testbench_paths = {units[name] for name in testbenches}
-    source_files = [paths.display(path) for path in files if path not in testbench_paths]
+    formal_paths = {units[name] for name in formal_units}
+    source_files = [paths.display(path) for path in files if path not in testbench_paths and path not in formal_paths]
     testbench_files = [paths.display(path) for path in files if path in testbench_paths]
+    formal_files = [paths.display(path) for path in files if path in formal_paths]
 
     constraints: list[ConstraintFile] = []
     for path in sorted(root.rglob("*")):
@@ -249,8 +268,9 @@ def inspect_project(
         hdl_files=[paths.display(path) for path in files],
         source_files=source_files,
         testbench_files=testbench_files,
+        formal_files=formal_files,
         languages=sorted(languages),
-        top_candidates=sorted(top_candidates),
+        top_candidates=top_candidates,
         testbenches=sorted(set(testbenches)),
         modules=sorted(modules),
         entities=sorted(entities),
@@ -274,7 +294,7 @@ class ResolvedSources:
     warnings: list[str] = field(default_factory=list)
 
 
-def parse_filelist(path: Path) -> tuple[list[Path], list[Path], dict[str, str]]:
+def parse_filelist(path: Path, missing: list[Path] | None = None) -> tuple[list[Path], list[Path], dict[str, str]]:
     files: list[Path] = []
     includes: list[Path] = []
     defines: dict[str, str] = {}
@@ -311,14 +331,22 @@ def parse_filelist(path: Path) -> tuple[list[Path], list[Path], dict[str, str]]:
         if line.startswith("-f "):
             nested = (base / line[3:].strip()).resolve()
             if nested.is_file():
-                n_files, n_includes, n_defines = parse_filelist(nested)
+                n_files, n_includes, n_defines = parse_filelist(nested, missing=missing)
                 files.extend(n_files)
                 includes.extend(n_includes)
                 defines.update(n_defines)
+            elif missing is not None:
+                missing.append(nested)
+            continue
+        if line.startswith(("+", "-")):
+            # Unsupported filelist options (for example +libext+ or -y) are
+            # ignored rather than being mistaken for missing source files.
             continue
         candidate = (base / line).resolve()
         if candidate.is_file():
             files.append(candidate)
+        elif missing is not None:
+            missing.append(candidate)
     return files, includes, defines
 
 
@@ -339,7 +367,16 @@ def resolve_sources(
     result.include_dirs.extend(paths.resolve_read(item, must_exist=False) for item in source.include_dirs)
     if source.filelist:
         filelist = paths.resolve_read(source.filelist, must_exist=True)
-        files, includes, defines = parse_filelist(filelist)
+        missing: list[Path] = []
+        files, includes, defines = parse_filelist(filelist, missing=missing)
+        if missing:
+            names = ", ".join(str(path) for path in missing[:10])
+            suffix = f" (and {len(missing) - 10} more)" if len(missing) > 10 else ""
+            raise InvalidInput(
+                f"Filelist references missing file(s): {names}{suffix}",
+                hint="Fix or remove the missing entries in the filelist.",
+                details={"missing": [str(path) for path in missing]},
+            )
         result.files.extend(files)
         result.include_dirs.extend(includes)
         result.defines.update(defines)

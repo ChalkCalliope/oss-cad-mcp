@@ -197,6 +197,12 @@ binaries open until the server is restarted.
 | `cad_tool_help` | Curated help, version, examples, and risk notes |
 | `cad_tool_run` | Allowlisted raw suite binary escape hatch |
 
+`cad_check(level="parse")` stops at the front end where supported (`slang --parse-only`,
+GHDL `-s`); Verilator and Icarus still compile for parse-level checks. `cad_netlist`
+hides Yosys cell-library/blackbox modules by default; set `include_library=true` to
+inspect them. Simulations that exceed `timeout_s` are reported as `timeout`, and
+waveforms larger than `max_waveform_bytes` are not registered as artifacts.
+
 Tools take a single nested `request` object, matching their published JSON schema. For
 example:
 
@@ -327,7 +333,12 @@ allow_unsafe = false
 max_jobs = 4
 default_timeout_s = 300
 max_output_bytes = 65536
+max_waveform_bytes = 268435456
 ```
+
+`max_waveform_bytes` caps simulation waveform artifacts (default 256 MiB); set it to `0`
+to disable the cap. Oversized waveforms remain in the job work directory but are not
+registered as artifacts.
 
 Useful commands:
 

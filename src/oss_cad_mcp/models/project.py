@@ -73,6 +73,7 @@ class ProjectProfile(BaseModel):
     hdl_files: list[str] = Field(default_factory=list)
     source_files: list[str] = Field(default_factory=list)
     testbench_files: list[str] = Field(default_factory=list)
+    formal_files: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
     top_candidates: list[str] = Field(default_factory=list)
     testbenches: list[str] = Field(default_factory=list)

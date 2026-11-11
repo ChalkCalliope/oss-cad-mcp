@@ -27,7 +27,13 @@ class ProjectRequest(BaseRequest):
 class CheckRequest(BaseRequest):
     source: SourceSet = Field(default_factory=SourceSet)
     top: str | None = None
-    level: Literal["parse", "lint", "elaborate"] = "lint"
+    level: Literal["parse", "lint", "elaborate"] = Field(
+        default="lint",
+        description=(
+            "parse stops at the front end where supported (slang --parse-only, GHDL -s); "
+            "lint performs semantic checks; elaborate builds hierarchy where supported."
+        ),
+    )
     engines: list[Literal["auto", "slang", "verilator", "iverilog", "ghdl"]] | None = None
     timeout_s: float = Field(default=180.0, gt=0, le=3600)
 
@@ -106,6 +112,10 @@ class NetlistRequest(BaseRequest):
     include_internal: bool = Field(
         default=False,
         description="Include Yosys internal helper modules such as $__ABC9_*.",
+    )
+    include_library: bool = Field(
+        default=False,
+        description="Include Yosys cell-library/blackbox modules such as SB_LUT4.",
     )
 
 

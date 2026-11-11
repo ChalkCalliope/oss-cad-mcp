@@ -72,6 +72,21 @@ async def test_simulation_and_waveform(app: AppContext) -> None:
     assert info.info is not None
     assert info.info.signal_count > 0
 
+    async def selected_signals(job):
+        return await run_waveform(
+            app,
+            job,
+            action="signals",
+            path=report.waveform.path,
+            signals=["clk"],
+            max_signals=1,
+        )
+
+    selected = await _run(app, "waveform", selected_signals, timeout=60)
+    assert selected.ok
+    assert "1 selected signal(s)" in selected.summary
+    assert len(selected.info.signals) == 1
+
 
 @pytest.mark.integration
 async def test_synthesis_and_netlist(app: AppContext) -> None:
@@ -286,3 +301,91 @@ def test_timing_asc_hint_uses_action(app: AppContext) -> None:
     with pytest.raises(InvalidInput) as excinfo:
         parse_timing_report(app, "design.asc")
     assert "action='icetime'" in str(excinfo.value)
+
+
+@pytest.mark.integration
+async def test_simulation_test_failed_marker_is_a_failure(app: AppContext) -> None:
+    (app.workspace / "sim_fail.v").write_text(
+        """\
+module sim_fail;
+    initial begin
+        $display("TEST FAILED: deliberate");
+        $finish;
+    end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_simulate(
+            app,
+            job,
+            source=SourceSet(files=["sim_fail.v"], language="verilog"),
+            top="sim_fail",
+            engine="iverilog",
+            trace="none",
+            timeout_s=30,
+        )
+
+    job = await app.jobs.execute("simulate", factory, timeout_s=30)
+    assert job.result is not None
+    assert job.result.ok is False
+    assert job.status == "failed"
+    assert "TEST FAILED" in job.result.stdout_tail
+
+
+@pytest.mark.integration
+async def test_simulation_timeout_is_terminal_failure(app: AppContext) -> None:
+    (app.workspace / "hang.v").write_text(
+        """\
+module hang;
+    initial begin
+        forever #10;
+    end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_simulate(
+            app,
+            job,
+            source=SourceSet(files=["hang.v"], language="verilog"),
+            top="hang",
+            engine="iverilog",
+            trace="none",
+            timeout_s=0.5,
+        )
+
+    job = await app.jobs.execute("simulate", factory, timeout_s=0.5)
+    assert job.result is not None
+    assert job.result.ok is False
+    assert job.result.timed_out is True
+    assert job.status == "timeout"
+    assert job.result.error is not None
+    assert job.result.error.code == "simulation_timeout"
+    assert job.result.waveform is None
+
+
+@pytest.mark.integration
+async def test_waveform_size_cap_skips_artifact(app: AppContext) -> None:
+    app.settings.max_waveform_bytes = 1
+
+    async def factory(job):
+        return await run_simulate(
+            app,
+            job,
+            source=SourceSet(files=["rtl/blinky.sv", "tb/tb_blinky.sv"]),
+            top="tb_blinky",
+            engine="iverilog",
+            trace="vcd",
+            timeout_s=120,
+        )
+
+    job = await app.jobs.execute("simulate", factory, timeout_s=120)
+    assert job.result is not None
+    assert job.result.ok is True
+    assert job.result.waveform is None
+    assert any("max_waveform_bytes" in warning for warning in job.result.warnings)

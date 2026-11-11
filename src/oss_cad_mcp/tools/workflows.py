@@ -46,6 +46,13 @@ def _job_error(job) -> ErrorInfo:
             hint="Re-submit the workflow if the cancellation was unintended.",
             retryable=True,
         )
+    if job.status == "timeout":
+        return ErrorInfo(
+            code="job_timeout",
+            message=f"Job {job.id} timed out.",
+            hint="Increase timeout_s or inspect the job log for a stuck process.",
+            retryable=True,
+        )
     if job.status in {"pending", "running"}:
         return ErrorInfo(
             code="job_running",
@@ -264,6 +271,7 @@ async def cad_netlist(ctx: Context, request: NetlistRequest) -> NetlistReport:
             other=request.other,
             limit=request.limit,
             include_internal=request.include_internal,
+            include_library=request.include_library,
         )
         report.job = job.to_ref()
         return report

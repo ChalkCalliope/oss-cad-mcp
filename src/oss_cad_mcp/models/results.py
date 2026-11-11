@@ -17,6 +17,7 @@ class SimulationReport(BaseModel):
     engine: str
     top: str | None = None
     exit_code: int | None = None
+    timed_out: bool = False
     finish_reason: str | None = None
     simulated_time: str | None = None
     stdout_tail: str = ""

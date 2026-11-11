@@ -157,6 +157,8 @@ class Job:
 class JobManager:
     """Creates, runs, and tracks jobs while limiting concurrent work."""
 
+    _TIMEOUT_GRACE_S = 2.0
+
     def __init__(
         self,
         *,
@@ -270,6 +272,11 @@ class JobManager:
             await asyncio.wait_for(asyncio.shield(job.task), timeout=timeout_s)
         except TimeoutError:
             job.append_event({"event": "wait_timeout", "timeout_s": timeout_s})
+            # Give the inner runner a short grace period to finish killing the
+            # process and finalize the job, so callers see a terminal result
+            # rather than a transient "running" job.
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError, Exception):
+                await asyncio.wait_for(asyncio.shield(job.task), timeout=self._TIMEOUT_GRACE_S)
         except asyncio.CancelledError:
             # A cad_job cancellation is a normal tool outcome, not a request
             # cancellation. Returning the job lets the workflow wrapper report
@@ -298,7 +305,8 @@ class JobManager:
                 result = await coro_factory(job)
                 job.result = result
                 ok = bool(getattr(result, "ok", True))
-                job.status = "passed" if ok else "failed"
+                timed_out = bool(getattr(result, "timed_out", False))
+                job.status = "timeout" if timed_out else ("passed" if ok else "failed")
                 job.summary = getattr(result, "summary", None) or job.summary
                 job.error = getattr(result, "error", None)
             except asyncio.CancelledError:
