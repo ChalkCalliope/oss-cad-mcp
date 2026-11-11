@@ -265,7 +265,7 @@ async def run_fpga_build(
             if ice_timing.ok:
                 timing = ice_timing
     bitstream = app.artifacts.register(job, bitstream_path, kind="bitstream", description="Packed FPGA bitstream")
-    artifacts = [bitstream]
+    artifacts = [*synth_report.artifacts, bitstream]
     if report_path.exists():
         artifacts.append(
             app.artifacts.register(job, report_path, kind="report", description="nextpnr timing/utilization report")

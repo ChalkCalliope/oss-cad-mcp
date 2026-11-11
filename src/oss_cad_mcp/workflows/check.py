@@ -109,6 +109,10 @@ async def run_check(
                 app, job, name="slang", args=args, cwd=app.workspace, timeout_s=timeout_s, step_name="slang"
             )
             all_diagnostics.extend(slang_parser.parse_diagnostics(diag_path, base=app.workspace))
+            if diag_path.exists():
+                artifacts.append(
+                    app.artifacts.register(job, diag_path, kind="report", description="slang diagnostic JSON")
+                )
             if level == "elaborate":
                 hier = await run_tool(
                     app,
@@ -155,6 +159,10 @@ async def run_check(
                 app, job, name="verilator", args=args, cwd=app.workspace, timeout_s=timeout_s, step_name="verilator"
             )
             all_diagnostics.extend(verilator_parser.parse_sarif(sarif_path, base=app.workspace))
+            if sarif_path.exists():
+                artifacts.append(
+                    app.artifacts.register(job, sarif_path, kind="report", description="Verilator SARIF diagnostics")
+                )
             if not sarif_path.exists():
                 all_diagnostics.extend(
                     verilator_parser.parse_text(result_tail(app, job, "verilator"), base=app.workspace)
