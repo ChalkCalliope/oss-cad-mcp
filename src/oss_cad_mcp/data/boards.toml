@@ -1,0 +1,59 @@
+# Software-build board presets. No programming/hardware actions are exposed.
+# Device/package names are validated by the target flow when a build runs.
+
+[boards.icebreaker]
+name = "iCEBreaker"
+family = "ice40"
+device = "up5k"
+package = "sg48"
+constraints = "pcf"
+default_frequency_mhz = 48.0
+notes = "Lattice iCE40 UltraPlus; open toolchain supported."
+
+[boards.tinyfpga-bx]
+name = "TinyFPGA BX"
+family = "ice40"
+device = "lp8k"
+package = "cm81"
+constraints = "pcf"
+default_frequency_mhz = 16.0
+notes = "Lattice iCE40 LP8K; open toolchain supported."
+
+[boards.icestick]
+name = "iCEstick"
+family = "ice40"
+device = "hx1k"
+package = "tq144"
+constraints = "pcf"
+default_frequency_mhz = 12.0
+notes = "Lattice iCE40 HX1K evaluation stick."
+
+[boards.ulx3s-85f]
+name = "ULX3S 85F"
+family = "ecp5"
+device = "85k"
+package = "CABGA381"
+speed = "6"
+constraints = "lpf"
+default_frequency_mhz = 25.0
+notes = "Lattice ECP5 85K; open toolchain supported."
+
+[boards.ulx3s-45f]
+name = "ULX3S 45F"
+family = "ecp5"
+device = "45k"
+package = "CABGA381"
+speed = "6"
+constraints = "lpf"
+default_frequency_mhz = 25.0
+notes = "Lattice ECP5 45K; open toolchain supported."
+
+[boards.ecp5-evn]
+name = "ECP5 Evaluation Board"
+family = "ecp5"
+device = "85k"
+package = "CABGA381"
+speed = "6"
+constraints = "lpf"
+default_frequency_mhz = 25.0
+notes = "Lattice ECP5 evaluation board."

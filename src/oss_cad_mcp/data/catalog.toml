@@ -1,0 +1,479 @@
+# Curated metadata for OSS CAD Suite binaries.
+# Entries missing here are discovered at runtime from <suite>/bin and receive
+# conservative defaults. Keep summaries short: they are shown to the agent.
+
+[tools.yosys]
+family = "synthesis"
+summary = "RTL synthesis, netlist manipulation, and formal front-end."
+risk = "executes_code"
+tags = ["verilog", "systemverilog", "vhdl", "json", "formal", "synthesis"]
+recommended_tool = "cad_synthesize"
+help_args = ["-h"]
+version_args = ["--version"]
+examples = [
+  "cad_synthesize(target='ice40', sources=SourceSet(files=['rtl/top.sv']), top='top')",
+  "cad_tool_help('yosys')",
+]
+
+[tools.yosys-abc]
+family = "synthesis"
+summary = "ABC logic synthesis and optimization engine used by Yosys."
+risk = "executes_code"
+internal = true
+tags = ["abc", "optimization", "internal"]
+
+[tools.slang]
+family = "lint"
+summary = "SystemVerilog compiler and linter with JSON diagnostics."
+risk = "read_only"
+tags = ["systemverilog", "lint", "json", "ast"]
+recommended_tool = "cad_check"
+version_args = ["--version"]
+examples = ["cad_check(engine='slang', level='lint')"]
+
+[tools.slang-tidy]
+family = "lint"
+summary = "SystemVerilog style and lint checker."
+risk = "read_only"
+tags = ["systemverilog", "lint", "style"]
+recommended_tool = "cad_check"
+
+[tools.slang-hier]
+family = "lint"
+summary = "Print elaborated SystemVerilog instance hierarchy."
+risk = "read_only"
+tags = ["systemverilog", "hierarchy", "elaboration"]
+recommended_tool = "cad_project"
+
+[tools.slang-reflect]
+family = "lint"
+summary = "Generate C++ reflection headers from SystemVerilog types."
+risk = "writes_files"
+tags = ["systemverilog", "reflection", "codegen"]
+recommended_tool = "cad_tool_run"
+
+[tools.verilator]
+family = "simulation"
+summary = "Lint, compile, and simulate SystemVerilog with C++ models."
+risk = "executes_code"
+tags = ["systemverilog", "simulation", "lint", "coverage", "vcd", "fst"]
+recommended_tool = "cad_simulate"
+version_args = ["--version"]
+examples = ["cad_simulate(engine='verilator', top='tb', sources=SourceSet(files=['rtl/*.sv','tb/*.sv']))"]
+
+[tools.verilator_bin]
+family = "simulation"
+summary = "Verilator implementation binary; use the verilator wrapper instead."
+risk = "executes_code"
+internal = true
+tags = ["verilator", "internal"]
+
+[tools.iverilog]
+family = "simulation"
+summary = "Icarus Verilog compiler."
+risk = "executes_code"
+tags = ["verilog", "simulation", "vcd"]
+recommended_tool = "cad_simulate"
+version_args = ["-V"]
+
+[tools.vvp]
+family = "simulation"
+summary = "Icarus Verilog simulation runtime."
+risk = "executes_code"
+tags = ["verilog", "simulation", "vvp"]
+recommended_tool = "cad_simulate"
+
+[tools.ghdl]
+family = "simulation"
+summary = "VHDL analyzer, elaborator, and simulator."
+risk = "executes_code"
+tags = ["vhdl", "simulation", "lint"]
+recommended_tool = "cad_simulate"
+version_args = ["--version"]
+
+[tools.sby]
+family = "formal"
+summary = "SymbiYosys front-end for formal verification flows."
+risk = "executes_code"
+tags = ["formal", "sva", "bmc", "prove", "cover"]
+recommended_tool = "cad_verify"
+version_args = ["--version"]
+examples = ["cad_verify(mode='prove', sources=SourceSet(files=['rtl/*.sv','formal/*.sv']), top='tb')"]
+
+[tools.mcy]
+family = "formal"
+summary = "Mutation coverage with Yosys."
+risk = "executes_code"
+tags = ["formal", "mutation", "coverage"]
+recommended_tool = "cad_verify"
+
+[tools.eqy]
+family = "formal"
+summary = "Equivalence checking with Yosys."
+risk = "executes_code"
+tags = ["formal", "equivalence", "yosys"]
+recommended_tool = "cad_verify"
+version_args = ["--version"]
+
+[tools.aigbmc]
+family = "formal"
+summary = "AIGER bounded model checker."
+risk = "executes_code"
+tags = ["formal", "aiger", "bmc"]
+
+[tools.aigsim]
+family = "formal"
+summary = "Simulate AIGER circuits."
+risk = "executes_code"
+tags = ["formal", "aiger", "simulation"]
+
+[tools.avy]
+family = "formal"
+summary = "Interpolating property-directed reachability model checker."
+risk = "executes_code"
+tags = ["formal", "model-checking", "avy"]
+
+[tools.pono]
+family = "formal"
+summary = "SMT-based model checker built on smt-switch."
+risk = "executes_code"
+tags = ["formal", "smt", "model-checking"]
+
+[tools.z3]
+family = "formal"
+summary = "Z3 SMT solver."
+risk = "executes_code"
+tags = ["smt", "solver", "z3"]
+
+[tools.boolector]
+family = "formal"
+summary = "Boolector SMT solver and BTOR model checker."
+risk = "executes_code"
+tags = ["smt", "solver", "btor"]
+
+[tools.bitwuzla]
+family = "formal"
+summary = "Bitwuzla SMT solver for bit-vectors and floating point."
+risk = "executes_code"
+tags = ["smt", "solver", "bitwuzla"]
+
+[tools.yices]
+family = "formal"
+summary = "Yices 2 SMT solver."
+risk = "executes_code"
+tags = ["smt", "solver", "yices"]
+
+[tools.cvc5]
+family = "formal"
+summary = "CVC5 SMT solver."
+risk = "executes_code"
+tags = ["smt", "solver", "cvc5"]
+
+[tools.nextpnr-ice40]
+family = "pnr"
+summary = "Place and route for Lattice iCE40 FPGAs."
+risk = "writes_files"
+tags = ["ice40", "fpga", "place-and-route", "timing"]
+recommended_tool = "cad_fpga_build"
+version_args = ["--version"]
+
+[tools.nextpnr-ecp5]
+family = "pnr"
+summary = "Place and route for Lattice ECP5 FPGAs."
+risk = "writes_files"
+tags = ["ecp5", "fpga", "place-and-route", "timing"]
+recommended_tool = "cad_fpga_build"
+version_args = ["--version"]
+
+[tools.nextpnr-himbaechel]
+family = "pnr"
+summary = "Place and route for Gowin, Nexus, GateMate, and other architectures."
+risk = "writes_files"
+tags = ["gowin", "nexus", "gatemate", "fpga", "place-and-route"]
+recommended_tool = "cad_fpga_build"
+version_args = ["--version"]
+
+[tools.nextpnr-nexus]
+family = "pnr"
+summary = "Place and route for Lattice Nexus FPGAs."
+risk = "writes_files"
+tags = ["nexus", "fpga", "place-and-route"]
+recommended_tool = "cad_fpga_build"
+version_args = ["--version"]
+
+[tools.nextpnr-machxo2]
+family = "pnr"
+summary = "Place and route for Lattice MachXO2 FPGAs."
+risk = "writes_files"
+tags = ["machxo2", "fpga", "place-and-route"]
+recommended_tool = "cad_fpga_build"
+version_args = ["--version"]
+
+[tools.icepack]
+family = "pnr"
+summary = "Pack and unpack iCE40 bitstreams."
+risk = "writes_files"
+tags = ["ice40", "bitstream", "pack"]
+recommended_tool = "cad_fpga_build"
+
+[tools.iceunpack]
+family = "pnr"
+summary = "Unpack iCE40 bitstreams."
+risk = "writes_files"
+tags = ["ice40", "bitstream", "unpack"]
+
+[tools.icetime]
+family = "timing"
+summary = "Static timing analysis for iCE40 designs."
+risk = "read_only"
+tags = ["ice40", "timing", "json"]
+recommended_tool = "cad_timing"
+
+[tools.icepll]
+family = "pnr"
+summary = "Calculate iCE40 PLL parameters."
+risk = "read_only"
+tags = ["ice40", "pll", "clock"]
+
+[tools.icebram]
+family = "pnr"
+summary = "Generate iCE40 BRAM initialization data."
+risk = "writes_files"
+tags = ["ice40", "bram", "memory"]
+
+[tools.ecppack]
+family = "pnr"
+summary = "Pack ECP5 bitstreams from Trellis configuration."
+risk = "writes_files"
+tags = ["ecp5", "bitstream", "pack"]
+recommended_tool = "cad_fpga_build"
+
+[tools.ecpunpack]
+family = "pnr"
+summary = "Unpack ECP5 bitstreams."
+risk = "writes_files"
+tags = ["ecp5", "bitstream", "unpack"]
+
+[tools.ecppll]
+family = "pnr"
+summary = "Calculate ECP5 PLL parameters."
+risk = "read_only"
+tags = ["ecp5", "pll", "clock"]
+
+[tools.ecpbram]
+family = "pnr"
+summary = "Generate ECP5 BRAM initialization data."
+risk = "writes_files"
+tags = ["ecp5", "bram", "memory"]
+
+[tools.gowin_pack]
+family = "pnr"
+summary = "Pack Gowin bitstreams."
+risk = "writes_files"
+tags = ["gowin", "bitstream", "pack"]
+recommended_tool = "cad_fpga_build"
+
+[tools.gowin_unpack]
+family = "pnr"
+summary = "Unpack Gowin bitstreams."
+risk = "writes_files"
+tags = ["gowin", "bitstream", "unpack"]
+
+[tools.gowin_pll]
+family = "pnr"
+summary = "Calculate Gowin PLL parameters."
+risk = "read_only"
+tags = ["gowin", "pll", "clock"]
+
+[tools.prjoxide]
+family = "pnr"
+summary = "Project Oxide tools for Lattice Nexus bitstreams."
+risk = "writes_files"
+tags = ["nexus", "bitstream", "fasm"]
+recommended_tool = "cad_fpga_build"
+
+[tools.gmpack]
+family = "pnr"
+summary = "Pack GateMate bitstreams."
+risk = "writes_files"
+tags = ["gatemate", "bitstream", "pack"]
+
+[tools.gmunpack]
+family = "pnr"
+summary = "Unpack GateMate bitstreams."
+risk = "writes_files"
+tags = ["gatemate", "bitstream", "unpack"]
+
+[tools.vcd2fst]
+family = "waveform"
+summary = "Convert VCD waveforms to FST."
+risk = "writes_files"
+tags = ["waveform", "vcd", "fst"]
+recommended_tool = "cad_waveform"
+
+[tools.fst2vcd]
+family = "waveform"
+summary = "Convert FST waveforms to VCD."
+risk = "writes_files"
+tags = ["waveform", "fst", "vcd"]
+recommended_tool = "cad_waveform"
+
+[tools.fstminer]
+family = "waveform"
+summary = "Extract signal values from FST waveforms."
+risk = "read_only"
+tags = ["waveform", "fst", "query"]
+recommended_tool = "cad_waveform"
+
+[tools.vcd2lxt]
+family = "waveform"
+summary = "Convert VCD waveforms to LXT."
+risk = "writes_files"
+tags = ["waveform", "vcd", "lxt"]
+
+[tools.vcd2lxt2]
+family = "waveform"
+summary = "Convert VCD waveforms to LXT2."
+risk = "writes_files"
+tags = ["waveform", "vcd", "lxt2"]
+
+[tools.lxt2vcd]
+family = "waveform"
+summary = "Convert LXT waveforms to VCD."
+risk = "writes_files"
+tags = ["waveform", "lxt", "vcd"]
+
+[tools.vzt2vcd]
+family = "waveform"
+summary = "Convert VZT waveforms to VCD."
+risk = "writes_files"
+tags = ["waveform", "vzt", "vcd"]
+
+[tools.evcd2vcd]
+family = "waveform"
+summary = "Convert EVCD waveforms to VCD."
+risk = "writes_files"
+tags = ["waveform", "evcd", "vcd"]
+
+[tools.gtkwave]
+family = "waveform"
+summary = "GTKWave waveform viewer (GUI)."
+risk = "gui"
+gui = true
+agent_facing = false
+tags = ["waveform", "gui", "viewer"]
+
+[tools.surfer]
+family = "waveform"
+summary = "Surfer waveform viewer (GUI)."
+risk = "gui"
+gui = true
+agent_facing = false
+tags = ["waveform", "gui", "viewer"]
+
+[tools.surver]
+family = "waveform"
+summary = "Headless web server for the Surfer waveform viewer."
+risk = "network"
+tags = ["waveform", "server", "viewer", "html"]
+recommended_tool = "cad_tool_run"
+
+[tools.twinwave]
+family = "waveform"
+summary = "Two-pane waveform viewer."
+risk = "gui"
+gui = true
+agent_facing = false
+tags = ["waveform", "gui", "viewer"]
+
+[tools.dot]
+family = "utility"
+summary = "Graphviz graph rendering."
+risk = "writes_files"
+tags = ["graphviz", "dot", "svg"]
+recommended_tool = "cad_tool_run"
+
+[tools.xdot]
+family = "utility"
+summary = "Graphviz dot viewer (GUI)."
+risk = "gui"
+gui = true
+agent_facing = false
+tags = ["graphviz", "gui"]
+
+[tools.cocotb-config]
+family = "utility"
+summary = "Report cocotb paths and simulator integration details."
+risk = "read_only"
+tags = ["cocotb", "python", "simulation"]
+recommended_tool = "cad_tool_help"
+
+[tools.openFPGALoader]
+family = "hardware"
+summary = "Universal FPGA programming tool. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["fpga", "programming", "hardware"]
+
+[tools.openocd]
+family = "hardware"
+summary = "Open On-Chip Debugger. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["debug", "jtag", "hardware"]
+
+[tools.dfu-util]
+family = "hardware"
+summary = "Device firmware upgrade utility. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["dfu", "usb", "hardware"]
+
+[tools.ecpprog]
+family = "hardware"
+summary = "Program ECP5 FPGAs over FTDI. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["ecp5", "programming", "hardware"]
+
+[tools.ecpdap]
+family = "hardware"
+summary = "Program ECP5 FPGAs over CMSIS-DAP. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["ecp5", "programming", "hardware"]
+
+[tools.fujprog]
+family = "hardware"
+summary = "Program ULX3S boards. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["ulx3s", "programming", "hardware"]
+
+[tools.iceprog]
+family = "hardware"
+summary = "Program iCE40 FPGAs. Hardware scope is disabled in v0.1."
+risk = "hardware"
+hardware = true
+agent_facing = false
+tags = ["ice40", "programming", "hardware"]
+
+[tools.bwrap]
+family = "utility"
+summary = "Bubblewrap sandbox helper. Not used by the verified WSL2 runtime."
+risk = "executes_code"
+internal = true
+tags = ["sandbox", "internal"]
+
+[tools.tabbypy3]
+family = "utility"
+summary = "Suite-bundled Python 3.11 interpreter. Internal runtime helper."
+risk = "executes_code"
+internal = true
+tags = ["python", "internal"]
