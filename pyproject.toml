@@ -1,0 +1,74 @@
+[project]
+name = "oss-cad-mcp"
+version = "0.1.0"
+description = "Intent-level MCP server for OSS CAD Suite HDL workflows"
+readme = "README.md"
+authors = [
+    { name = "Chalk Calliope", email = "chalkcalliope@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "anyio>=4.10",
+    "filelock>=4.2",
+    "ijson>=3.6",
+    "mcp>=2.3,<3",
+    "orjson>=3.13",
+    "platformdirs>=4.14",
+    "pydantic>=2.12",
+    "pydantic-settings>=2.16",
+    "rich>=15.0.0",
+    "tomli-w>=1.2",
+    "typer>=0.29",
+]
+
+[project.scripts]
+oss-cad-mcp = "oss_cad_mcp.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170",
+    "pre-commit>=4.7",
+    "pyright>=1.1.414",
+    "pytest>=9.2",
+    "pytest-asyncio>=1.4",
+    "pytest-cov>=7.1.0",
+    "pytest-timeout>=2.4",
+    "ruff>=0.17",
+    "syrupy>=7.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501", "B008"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = [".venv", "build", "third-party"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["oss_cad_mcp"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
