@@ -98,7 +98,9 @@ async def run_simulate(
         )
     trace_mode = _trace_mode(trace, selected)
     combined_text = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in resolved.files)
-    dump_detected = _has_dump(combined_text)
+    # GHDL is always asked for a VCD by this workflow; it does not use the
+    # Verilog $dumpfile/$dumpvars convention.
+    dump_detected = selected == "ghdl" or _has_dump(combined_text)
     warnings: list[str] = []
     diagnostics: list[Diagnostic] = []
     artifacts = []
@@ -232,7 +234,14 @@ async def run_simulate(
             return _simulation_failure(
                 job, selected, top, diagnostics, warnings, analyze.exit_code, "GHDL analysis failed."
             )
-        elaborate_args = ["-e", "--std=08", f"--workdir={workdir}", top]
+        elaborate_args = [
+            "-e",
+            "--std=08",
+            f"--workdir={workdir}",
+            "-o",
+            str(workdir / "sim"),
+            top,
+        ]
         elaborate = await run_tool(
             app,
             job,
@@ -247,9 +256,16 @@ async def run_simulate(
                 job, selected, top, diagnostics, warnings, elaborate.exit_code, "GHDL elaboration failed."
             )
         wave = work_path(job, "wave.vcd")
-        run_args = ["-r", "--std=08", f"--workdir={workdir}", top, f"--vcd={wave}", *(plusargs or [])]
+        run_args = [f"--vcd={wave}", *(plusargs or [])]
         run_result = await run_tool(
-            app, job, name="ghdl", args=run_args, cwd=work_path(job, "."), timeout_s=timeout_s, step_name="simulate"
+            app,
+            job,
+            name="sim",
+            executable=workdir / "sim",
+            args=run_args,
+            cwd=workdir,
+            timeout_s=timeout_s,
+            step_name="simulate",
         )
         engine_label = "ghdl"
 

@@ -29,9 +29,13 @@ def _load(path: Path) -> dict[str, Any]:
     return data
 
 
-def _modules(data: dict[str, Any]) -> dict[str, Any]:
+def _modules(data: dict[str, Any], *, include_internal: bool = False) -> dict[str, Any]:
     modules = data.get("modules", {})
-    return modules if isinstance(modules, dict) else {}
+    if not isinstance(modules, dict):
+        return {}
+    if include_internal:
+        return modules
+    return {name: module for name, module in modules.items() if not str(name).startswith("$")}
 
 
 def _clean_name(name: str) -> str:
@@ -152,6 +156,8 @@ def _fanout(modules: dict[str, Any], net_filter: str, limit: int) -> list[Netlis
                 for bit in net.get("bits", []) or []:
                     if isinstance(bit, int):
                         selected_bits.add(bit)
+        if not selected_names:
+            continue
         loads: list[NetlistMatch] = []
         cells = module.get("cells", {})
         if isinstance(cells, dict):
@@ -193,10 +199,11 @@ def inspect_netlist(
     name: str | None = None,
     other: str | Path | None = None,
     limit: int = 200,
+    include_internal: bool = False,
 ) -> NetlistReport:
     resolved = app.paths.resolve_read(path, must_exist=True)
     data = _load(resolved)
-    modules = _modules(data)
+    modules = _modules(data, include_internal=include_internal)
     counts = _cell_counts(modules)
     base = NetlistReport(
         ok=True,
@@ -230,7 +237,7 @@ def inspect_netlist(
             raise InvalidInput("diff requires other (a second netlist path).")
         other_path = app.paths.resolve_read(other, must_exist=True)
         other_data = _load(other_path)
-        other_modules = _modules(other_data)
+        other_modules = _modules(other_data, include_internal=include_internal)
         other_counts = _cell_counts(other_modules)
         added = {key: value for key, value in counts.items() if key not in other_counts}
         removed = {key: value for key, value in other_counts.items() if key not in counts}

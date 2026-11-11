@@ -18,8 +18,8 @@ def parse_timing_report(app: AppContext, path: str | Path, *, clock_mhz: float |
     suffix = resolved.suffix.lower()
     if suffix == ".asc":
         raise InvalidInput(
-            "An .asc file needs icetime execution; pass driver='icetime' instead.",
-            hint="Use cad_timing(driver='icetime', path='design.asc', device='up5k').",
+            "An .asc file needs icetime execution; pass action='icetime' instead.",
+            hint="Use cad_timing(action='icetime', path='design.asc', device='up5k').",
         )
     try:
         data = json.loads(resolved.read_text(encoding="utf-8", errors="replace"))

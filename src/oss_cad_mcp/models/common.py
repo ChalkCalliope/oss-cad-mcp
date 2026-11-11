@@ -108,6 +108,8 @@ class ToolHelp(BaseModel):
     risk: Risk
     recommended_tool: str | None = None
     notes: list[str] = Field(default_factory=list)
+    ok: bool = True
+    error: ErrorInfo | None = None
 
 
 class SourceSet(BaseModel):

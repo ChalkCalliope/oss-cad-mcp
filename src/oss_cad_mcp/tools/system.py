@@ -10,7 +10,7 @@ from mcp.server.mcpserver import Context
 
 from oss_cad_mcp import API_VERSION, __version__
 from oss_cad_mcp.app import AppContext
-from oss_cad_mcp.errors import CadError, PathNotAllowed
+from oss_cad_mcp.errors import CadError, PathNotAllowed, ToolNotFound
 from oss_cad_mcp.models.common import (
     CapabilityReport,
     ErrorInfo,
@@ -43,6 +43,10 @@ def _error(exc: Exception) -> ErrorInfo:
     if isinstance(exc, CadError):
         return exc.to_info()
     return ErrorInfo(code="internal_error", message=str(exc))
+
+
+def _blocked_job(app: AppContext, *, summary: str, error: ErrorInfo):
+    return app.jobs.blocked("tool", summary=summary, error=error).to_ref()
 
 
 def _hardware_info() -> HardwareInfo:
@@ -186,7 +190,8 @@ async def cad_project(ctx: Context, request: ProjectRequest) -> ProjectActionRep
         )
     if request.action == "validate":
         warnings = list(profile.warnings)
-        if profile.config and profile.config.top and profile.config.top not in profile.modules:
+        known_units = set(profile.modules) | set(profile.entities)
+        if profile.config and profile.config.top and profile.config.top not in known_units:
             warnings.append(f"Configured top {profile.config.top!r} is not defined.")
         return ProjectActionReport(
             ok=not warnings,
@@ -225,14 +230,18 @@ async def cad_project(ctx: Context, request: ProjectRequest) -> ProjectActionRep
         "project": {
             "name": root.name,
             "top": profile.top_candidates[0] if profile.top_candidates else None,
-            "sources": profile.hdl_files[:200],
-            "testbenches": profile.testbenches,
+            "sources": (profile.source_files or profile.hdl_files)[:200],
+            "testbenches": profile.testbench_files,
             "include_dirs": [],
             "defines": {},
             "language": "auto",
         },
         "target": {},
-        "sim": {"engine": "auto", "trace": "auto"},
+        "sim": {
+            "engine": "auto",
+            "testbench": profile.testbenches[0] if profile.testbenches else None,
+            "trace": "auto",
+        },
         "formal": {"engine": "smtbmc", "depth": 20, "mode": "prove"},
     }
     payload["project"] = {key: value for key, value in payload["project"].items() if value is not None}
@@ -269,75 +278,101 @@ async def cad_tool_search(ctx: Context, request: ToolSearchRequest) -> ToolSearc
 async def cad_tool_help(ctx: Context, request: ToolHelpRequest) -> ToolHelp:
     """Show curated help, version, examples, and risk notes for a suite tool."""
     app = get_app(ctx)
-    return await app.require_registry().help(request.tool)
+    try:
+        return await app.require_registry().help(request.tool)
+    except ToolNotFound as exc:
+        return ToolHelp(
+            tool=request.tool,
+            summary="Unknown suite tool.",
+            binary=request.tool,
+            risk="read_only",
+            ok=False,
+            error=exc.to_info(),
+            notes=["Use cad_tool_search to discover available tools."],
+        )
 
 
 async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
     """Run an allowlisted suite binary with argv. Prefer high-level workflows."""
     app = get_app(ctx)
     if not app.settings.allow_raw:
+        error = ErrorInfo(
+            code="raw_disabled",
+            message="Raw tool execution is disabled by configuration.",
+            hint="Use the high-level workflows or set allow_raw=true.",
+        )
         return ToolRunReport(
             ok=False,
             tool=request.tool,
-            job=app.jobs.create("tool").to_ref(),
-            error=ErrorInfo(
-                code="raw_disabled",
-                message="Raw tool execution is disabled by configuration.",
-                hint="Use the high-level workflows or set allow_raw=true.",
-            ),
+            job=_blocked_job(app, summary="Raw tool execution is disabled.", error=error),
+            error=error,
             summary="Raw tool execution is disabled.",
         )
     registry = app.require_registry()
-    entry = registry.get(request.tool)
+    try:
+        entry = registry.get(request.tool)
+    except ToolNotFound as exc:
+        error = exc.to_info()
+        return ToolRunReport(
+            ok=False,
+            tool=request.tool,
+            job=_blocked_job(app, summary="Unknown suite tool.", error=error),
+            error=error,
+            summary="Unknown suite tool.",
+        )
     if entry.hardware:
+        error = ErrorInfo(
+            code="hardware_disabled",
+            message="Hardware programming is out of scope for v0.1.",
+            hint="Use software workflows: check, simulate, synthesize, verify, fpga_build.",
+        )
         return ToolRunReport(
             ok=False,
             tool=entry.name,
-            job=app.jobs.create("tool").to_ref(),
-            error=ErrorInfo(
-                code="hardware_disabled",
-                message="Hardware programming is out of scope for v0.1.",
-                hint="Use software workflows: check, simulate, synthesize, verify, fpga_build.",
-            ),
+            job=_blocked_job(app, summary="Hardware tools are disabled.", error=error),
+            error=error,
             summary="Hardware tools are disabled.",
         )
     if entry.gui:
+        error = ErrorInfo(
+            code="gui_not_supported",
+            message="GUI tools are not run as blocking MCP calls.",
+            hint="Use cad_waveform for analysis or launch a viewer manually.",
+        )
         return ToolRunReport(
             ok=False,
             tool=entry.name,
-            job=app.jobs.create("tool").to_ref(),
-            error=ErrorInfo(
-                code="gui_not_supported",
-                message="GUI tools are not run as blocking MCP calls.",
-                hint="Use cad_waveform for analysis or launch a viewer manually.",
-            ),
+            job=_blocked_job(app, summary="GUI tool blocked.", error=error),
+            error=error,
             summary="GUI tool blocked.",
         )
     unsafe_allowed = request.allow_unsafe and app.settings.allow_unsafe
     if entry.internal and not unsafe_allowed:
+        error = ErrorInfo(
+            code="internal_tool",
+            message="This is an internal suite helper.",
+            hint="Use the high-level wrapper or set allow_unsafe=true only if you understand it.",
+        )
         return ToolRunReport(
             ok=False,
             tool=entry.name,
-            job=app.jobs.create("tool").to_ref(),
-            error=ErrorInfo(
-                code="internal_tool",
-                message="This is an internal suite helper.",
-                hint="Use the high-level wrapper or set allow_unsafe=true only if you understand it.",
-            ),
+            job=_blocked_job(app, summary="Internal tool blocked.", error=error),
+            error=error,
             summary="Internal tool blocked.",
         )
     if entry.name == "yosys" and not unsafe_allowed:
         joined = " ".join(request.args).lower()
         if any(token in joined for token in (" shell", "exec", "plugin", "read -tcl", "tcl ")):
+            error = ErrorInfo(
+                code="unsafe_command",
+                message="The raw Yosys invocation contains a disabled command.",
+                hint="Use cad_synthesize for synthesis; set allow_unsafe=true for advanced use.",
+            )
             return ToolRunReport(
                 ok=False,
                 tool=entry.name,
-                job=app.jobs.create("tool").to_ref(),
-                error=ErrorInfo(
-                    code="unsafe_command",
-                    message="The raw Yosys invocation contains a disabled command.",
-                    hint="Use cad_synthesize for synthesis; set allow_unsafe=true for advanced use.",
-                ),
+                job=_blocked_job(app, summary="Unsafe Yosys command blocked.", error=error),
+                error=error,
                 summary="Unsafe Yosys command blocked.",
             )
     cwd = app.workspace
@@ -345,19 +380,21 @@ async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
         try:
             cwd = app.paths.resolve_read(request.cwd, must_exist=True)
         except PathNotAllowed as exc:
+            error = exc.to_info()
             return ToolRunReport(
                 ok=False,
                 tool=entry.name,
-                job=app.jobs.create("tool").to_ref(),
-                error=exc.to_info(),
+                job=_blocked_job(app, summary="Invalid working directory.", error=error),
+                error=error,
                 summary="Invalid working directory.",
             )
         if not cwd.is_dir():
+            error = ErrorInfo(code="invalid_cwd", message=f"Not a directory: {cwd}")
             return ToolRunReport(
                 ok=False,
                 tool=entry.name,
-                job=app.jobs.create("tool").to_ref(),
-                error=ErrorInfo(code="invalid_cwd", message=f"Not a directory: {cwd}"),
+                job=_blocked_job(app, summary="Invalid working directory.", error=error),
+                error=error,
                 summary="Invalid working directory.",
             )
 

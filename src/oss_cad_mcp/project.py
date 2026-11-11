@@ -49,6 +49,14 @@ _CONSTRAINT_KINDS = {
 _CONFIG_NAMES = ("oss-cad-project.toml", ".oss-cad-project.toml")
 
 
+def _excluded_path(path: Path, root: Path, excluded: Iterable[str]) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        relative = path
+    return any(part in excluded for part in relative.parts)
+
+
 def find_config_file(root: Path) -> Path | None:
     for name in _CONFIG_NAMES:
         path = root / name
@@ -85,7 +93,7 @@ def _iter_hdl_files(root: Path, exclude: Iterable[str] = ()) -> list[Path]:
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in _HDL_SUFFIXES:
             continue
-        if any(part in excluded for part in path.parts):
+        if _excluded_path(path, root, excluded):
             continue
         files.append(path)
     return sorted(files)
@@ -112,6 +120,23 @@ def _instantiated_names(text: str, module_names: set[str]) -> set[str]:
     return found
 
 
+def _instantiated_entities(text: str, entity_names: set[str]) -> set[str]:
+    """Find VHDL direct/component instantiations of project entities."""
+    found: set[str] = set()
+    for name in entity_names:
+        escaped = re.escape(name)
+        direct = rf":\s*entity\s+(?:work\.)?{escaped}\b"
+        component = rf"\bcomponent\s+{escaped}\b"
+        labelled = rf"\b[A-Za-z_]\w*\s*:\s*(?:work\.)?{escaped}\b"
+        if (
+            re.search(direct, text, re.IGNORECASE)
+            or re.search(component, text, re.IGNORECASE)
+            or re.search(labelled, text, re.IGNORECASE)
+        ):
+            found.add(name)
+    return found
+
+
 def _testbench_like(name: str, path: Path) -> bool:
     lowered = name.lower()
     return (
@@ -126,6 +151,13 @@ def _testbench_like(name: str, path: Path) -> bool:
 def _clocks(text: str) -> list[str]:
     clocks = re.findall(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)", text)
     clocks.extend(re.findall(r"\balways_ff\s*@\s*\(\s*(?:posedge|negedge)\s+([A-Za-z_]\w*)", text))
+    clocks.extend(
+        re.findall(
+            r"\b(?:rising_edge|falling_edge)\s*\(\s*([A-Za-z_]\w*)\s*\)",
+            text,
+            re.IGNORECASE,
+        )
+    )
     return list(dict.fromkeys(clocks))
 
 
@@ -157,24 +189,26 @@ def inspect_project(
             entities.setdefault(name, path)
 
     module_names = set(modules)
+    entity_names = set(entities)
     instantiated: set[str] = set()
     for text in text_by_file.values():
         instantiated |= _instantiated_names(text, module_names)
+        instantiated |= _instantiated_entities(text, entity_names)
 
-    top_candidates = [
-        name for name, path in modules.items() if name not in instantiated and not _testbench_like(name, path)
-    ]
+    units: dict[str, Path] = {**modules, **entities}
+    testbenches = {
+        name for name, path in units.items() if _testbench_like(name, path) or _testbench_like(path.stem, path)
+    }
+    top_candidates = [name for name in units if name not in instantiated and name not in testbenches]
     if not top_candidates:
-        top_candidates = [name for name in modules if not _testbench_like(name, modules[name])]
-    testbenches = [
-        name
-        for name, path in modules.items()
-        if _testbench_like(name, path) or _testbench_like(modules[name].stem, modules[name])
-    ]
+        top_candidates = [name for name in units if name not in testbenches]
+    testbench_paths = {units[name] for name in testbenches}
+    source_files = [paths.display(path) for path in files if path not in testbench_paths]
+    testbench_files = [paths.display(path) for path in files if path in testbench_paths]
 
     constraints: list[ConstraintFile] = []
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or any(part in _EXCLUDE_DIRS for part in path.parts):
+        if not path.is_file() or _excluded_path(path, root, _EXCLUDE_DIRS):
             continue
         kind_target = _CONSTRAINT_KINDS.get(path.suffix.lower())
         if kind_target:
@@ -200,8 +234,11 @@ def inspect_project(
         warnings.append("No HDL files were found under the project root.")
     if config is None:
         warnings.append("No oss-cad-project.toml was found; using automatic detection.")
-    if top_candidates and config and config.top and config.top not in modules:
-        warnings.append(f"Configured top module {config.top!r} was not found in the project.")
+    if files and not top_candidates:
+        warnings.append("No top-level HDL unit was detected.")
+    known_units = set(modules) | set(entities)
+    if top_candidates and config and config.top and config.top not in known_units:
+        warnings.append(f"Configured top {config.top!r} was not found in the project.")
     if any(path.as_posix().startswith("/mnt/") for path in files):
         warnings.append("Project appears to be on a mounted Windows filesystem; prefer the Linux filesystem.")
 
@@ -210,6 +247,8 @@ def inspect_project(
         config_file=paths.display(config_path) if config_path else None,
         config=config,
         hdl_files=[paths.display(path) for path in files],
+        source_files=source_files,
+        testbench_files=testbench_files,
         languages=sorted(languages),
         top_candidates=sorted(top_candidates),
         testbenches=sorted(set(testbenches)),
@@ -306,7 +345,7 @@ def resolve_sources(
         result.defines.update(defines)
 
     patterns = list(source.files)
-    if not patterns:
+    if not patterns and not source.filelist:
         if project and project.sources:
             patterns.extend(project.sources)
         if include_testbenches and project and project.testbenches:

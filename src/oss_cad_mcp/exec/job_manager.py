@@ -57,6 +57,7 @@ class Job:
     artifacts: list[ArtifactInfo] = field(default_factory=list)
     steps: list[StepRecord] = field(default_factory=list)
     task: asyncio.Task[Any] | None = None
+    cancel_requested: bool = False
 
     @property
     def manifest_path(self) -> Path:
@@ -244,6 +245,17 @@ class JobManager:
         self._jobs[job.id] = job
         return job
 
+    def blocked(self, kind: str, *, summary: str, error: ErrorInfo) -> Job:
+        """Create a terminal job for work rejected before execution."""
+        job = self.create(kind)
+        job.status = "failed"
+        job.summary = summary
+        job.error = error
+        job.ended_at = utcnow()
+        job.append_event({"event": "blocked", "error": error.model_dump(mode="json")})
+        job.write_manifest()
+        return job
+
     async def execute(
         self,
         kind: str,
@@ -259,6 +271,12 @@ class JobManager:
         except TimeoutError:
             job.append_event({"event": "wait_timeout", "timeout_s": timeout_s})
         except asyncio.CancelledError:
+            # A cad_job cancellation is a normal tool outcome, not a request
+            # cancellation. Returning the job lets the workflow wrapper report
+            # a structured job_cancelled result to the client.
+            if job.cancel_requested:
+                job.append_event({"event": "cancel_returned"})
+                return job
             raise
         except Exception:
             # _run has already recorded the failure in the manifest.
@@ -391,6 +409,7 @@ class JobManager:
 
     async def cancel(self, job: Job) -> Job:
         if job.task is not None and not job.task.done():
+            job.cancel_requested = True
             job.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await job.task

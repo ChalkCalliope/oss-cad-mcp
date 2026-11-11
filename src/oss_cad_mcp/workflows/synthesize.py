@@ -90,7 +90,9 @@ async def run_synthesize(
                 hint="Use cad_check with GHDL, or install a suite with the ghdl plugin.",
             )
         yosys_args.extend(["-m", "ghdl"])
-        commands.append("ghdl --std=08 " + " ".join(_quote(str(path)) for path in resolved.files))
+        ghdl_command = "ghdl --std=08 " + " ".join(_quote(str(path)) for path in resolved.files)
+        ghdl_command += f" -e {_quote(top)}" if top else " -e"
+        commands.append(ghdl_command)
     elif resolved.language == "mixed" and any(path.suffix.lower() in {".vhd", ".vhdl"} for path in resolved.files):
         raise InvalidInput(
             "Mixed VHDL/Verilog synthesis is not supported in v0.1.",
@@ -130,8 +132,14 @@ async def run_synthesize(
         synth_args.append("-flatten")
     if abc9 and target in {"ice40", "ecp5"}:
         synth_args.append("-abc9")
-    synth_args.extend(["-json", _quote(str(netlist))])
-    commands.append(" ".join(synth_args))
+    if target == "generic":
+        # The generic "synth" command does not accept -json. Run synthesis
+        # first and emit the netlist with the dedicated backend.
+        commands.append(" ".join(synth_args))
+        commands.append(f"write_json {_quote(str(netlist))}")
+    else:
+        synth_args.extend(["-json", _quote(str(netlist))])
+        commands.append(" ".join(synth_args))
     commands.append(f"tee -o {_quote(str(stat_path))} stat -json")
     script_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
     yosys_args.extend(["-s", str(script_path)])

@@ -71,6 +71,8 @@ class ProjectProfile(BaseModel):
     config_file: str | None = None
     config: ProjectConfig | None = None
     hdl_files: list[str] = Field(default_factory=list)
+    source_files: list[str] = Field(default_factory=list)
+    testbench_files: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
     top_candidates: list[str] = Field(default_factory=list)
     testbenches: list[str] = Field(default_factory=list)

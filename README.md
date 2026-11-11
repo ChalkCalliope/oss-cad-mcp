@@ -9,7 +9,8 @@ bitstreams, inspect waveforms and netlists — instead of exposing 155 raw CLI b
 
 This first version deliberately focuses on **software flows**:
 
-- SystemVerilog / Verilog lint, elaboration, simulation, synthesis, formal verification
+- Verilog / SystemVerilog / VHDL lint, elaboration, simulation, synthesis (VHDL via the GHDL plugin)
+- Formal verification for Verilog/SystemVerilog
 - iCE40 and ECP5 software builds (synth → place-and-route → pack → timing)
 - VCD/FST waveform inspection and Yosys JSON netlist inspection
 - A catalog and raw dispatcher that cover the rest of the suite

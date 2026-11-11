@@ -39,6 +39,13 @@ from oss_cad_mcp.workflows.waveform import run_waveform
 def _job_error(job) -> ErrorInfo:
     if job.error is not None:
         return job.error
+    if job.status == "cancelled":
+        return ErrorInfo(
+            code="job_cancelled",
+            message=f"Job {job.id} was cancelled.",
+            hint="Re-submit the workflow if the cancellation was unintended.",
+            retryable=True,
+        )
     if job.status in {"pending", "running"}:
         return ErrorInfo(
             code="job_running",
@@ -256,6 +263,7 @@ async def cad_netlist(ctx: Context, request: NetlistRequest) -> NetlistReport:
             name=request.name,
             other=request.other,
             limit=request.limit,
+            include_internal=request.include_internal,
         )
         report.job = job.to_ref()
         return report

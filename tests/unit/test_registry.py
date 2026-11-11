@@ -30,3 +30,15 @@ def test_hardware_tools_are_not_agent_facing(app: AppContext) -> None:
     entry = app.registry.get("openFPGALoader")
     assert entry.hardware is True
     assert entry.agent_facing is False
+
+
+@pytest.mark.integration
+def test_search_include_flags_with_empty_query(app: AppContext) -> None:
+    assert app.registry is not None
+
+    hardware = app.registry.search("", risk="hardware", include_hardware=True, limit=200)
+    assert hardware
+    assert any(entry.hardware for entry in hardware)
+
+    internal = app.registry.search("", include_internal=True, limit=200)
+    assert any(entry.internal for entry in internal)

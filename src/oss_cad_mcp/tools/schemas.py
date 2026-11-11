@@ -103,6 +103,10 @@ class NetlistRequest(BaseRequest):
     name: str | None = None
     other: str | None = None
     limit: int = Field(default=200, ge=1, le=5_000)
+    include_internal: bool = Field(
+        default=False,
+        description="Include Yosys internal helper modules such as $__ABC9_*.",
+    )
 
 
 class TimingRequest(BaseRequest):

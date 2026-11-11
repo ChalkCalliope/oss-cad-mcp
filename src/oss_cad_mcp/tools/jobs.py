@@ -118,13 +118,18 @@ async def cad_artifact(ctx: Context, request: ArtifactRequest) -> ArtifactAction
     """List or read job artifacts and text files inside the workspace."""
     app = get_app(ctx)
     if request.action == "list":
-        job = app.jobs.get(request.job_id) if request.job_id else (app.jobs.list(1)[0] if app.jobs.list(1) else None)
+        if request.job_id:
+            job = app.jobs.get(request.job_id)
+        else:
+            # Listing without a job should show a useful artifact set, not the
+            # most recent job if that job happened to produce no artifacts.
+            job = next((item for item in app.jobs.list(200) if item.artifacts), None)
         if job is None:
             return ArtifactActionReport(
                 ok=False,
                 action=request.action,
-                error=ErrorInfo(code="job_not_found", message="No job found."),
-                summary="No job found.",
+                error=ErrorInfo(code="job_not_found", message="No job with artifacts found."),
+                summary="No job with artifacts found.",
             )
         return ArtifactActionReport(
             ok=True,
@@ -133,6 +138,55 @@ async def cad_artifact(ctx: Context, request: ArtifactRequest) -> ArtifactAction
             artifacts=job.artifacts,
             summary=f"{len(job.artifacts)} artifact(s).",
         )
+
+    job = app.jobs.get(request.job_id) if request.job_id else None
+
+    # An explicit path must take precedence over implicit artifact discovery.
+    # Otherwise a workspace with any existing artifact can make a path-based
+    # read return an unrelated file.
+    if request.path and not request.artifact_id:
+        try:
+            path = app.paths.resolve_read(request.path, must_exist=True)
+        except Exception as exc:
+            return ArtifactActionReport(ok=False, action=request.action, error=_error(exc), summary=str(exc))
+        if not path.is_file():
+            return ArtifactActionReport(
+                ok=False,
+                action=request.action,
+                error=ErrorInfo(code="not_a_file", message=f"Not a file: {path}"),
+                summary="Not a file.",
+            )
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        if request.action == "hash":
+            return ArtifactActionReport(
+                ok=True,
+                action=request.action,
+                job=job.to_ref() if job else None,
+                value=digest,
+                summary="SHA-256 computed.",
+            )
+        if request.action == "stat":
+            return ArtifactActionReport(
+                ok=True,
+                action=request.action,
+                job=job.to_ref() if job else None,
+                value=digest,
+                total_bytes=len(data),
+                summary=f"{app.paths.display(path)} ({len(data)} bytes).",
+            )
+        text = data[request.offset : request.offset + request.max_bytes].decode("utf-8", errors="replace")
+        return ArtifactActionReport(
+            ok=True,
+            action=request.action,
+            job=job.to_ref() if job else None,
+            text=text,
+            truncated=len(data) > request.offset + request.max_bytes,
+            total_bytes=len(data),
+            value=digest,
+            summary=f"Read {len(text)} of {len(data)} bytes from {app.paths.display(path)}.",
+        )
+
     job, artifact = _find_artifact(app, request.job_id, request.artifact_id)
     if artifact is not None:
         if request.action == "stat":
@@ -174,32 +228,6 @@ async def cad_artifact(ctx: Context, request: ArtifactRequest) -> ArtifactAction
             truncated=truncated,
             total_bytes=total,
             summary=f"Read {len(text)} of {total} bytes.",
-        )
-    if request.path:
-        try:
-            path = app.paths.resolve_read(request.path, must_exist=True)
-        except Exception as exc:
-            return ArtifactActionReport(ok=False, action=request.action, error=_error(exc), summary=str(exc))
-        if not path.is_file():
-            return ArtifactActionReport(
-                ok=False,
-                action=request.action,
-                error=ErrorInfo(code="not_a_file", message=f"Not a file: {path}"),
-                summary="Not a file.",
-            )
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if request.action == "hash":
-            return ArtifactActionReport(ok=True, action=request.action, value=digest, summary="SHA-256 computed.")
-        data = path.read_bytes()
-        text = data[request.offset : request.offset + request.max_bytes].decode("utf-8", errors="replace")
-        return ArtifactActionReport(
-            ok=True,
-            action=request.action,
-            text=text,
-            truncated=len(data) > request.offset + request.max_bytes,
-            total_bytes=len(data),
-            value=digest,
-            summary=f"Read {len(text)} of {len(data)} bytes from {app.paths.display(path)}.",
         )
     return ArtifactActionReport(
         ok=False,

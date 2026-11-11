@@ -221,7 +221,13 @@ class Catalog:
             haystack = " ".join((entry.name, entry.binary, entry.summary, *entry.tags)).lower()
             score = 0
             if not tokens:
-                score = 1 if entry.agent_facing else 0
+                score = (
+                    1
+                    if entry.agent_facing
+                    or (entry.hardware and include_hardware)
+                    or (entry.internal and include_internal)
+                    else 0
+                )
             else:
                 lowered = entry.name.lower()
                 for token in tokens:
