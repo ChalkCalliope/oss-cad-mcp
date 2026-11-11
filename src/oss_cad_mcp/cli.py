@@ -151,6 +151,42 @@ def tool_help_command(
     asyncio.run(ctx.jobs.shutdown())
 
 
+@app.command("update-suite")
+def update_suite_command(
+    path: Path | None = typer.Argument(None, help="Suite root to install/update."),
+    check: bool = typer.Option(False, "--check", help="Show available version without downloading."),
+    force: bool = typer.Option(False, "--force", help="Reinstall; replace a non-suite directory."),
+    no_backup: bool = typer.Option(False, "--no-backup", help="Remove the previous installation."),
+    no_resume: bool = typer.Option(False, "--no-resume", help="Discard partial download."),
+    no_validate: bool = typer.Option(False, "--no-validate", help="Skip the yosys -V runtime check."),
+    release_tag: str | None = typer.Option(None, "--release-tag", help="Install a specific release tag."),
+    timeout: float = typer.Option(60.0, "--timeout", help="HTTP timeout in seconds."),
+) -> None:
+    """Download and install the latest daily OSS CAD Suite release."""
+    from oss_cad_mcp.suite_update import UpdateError, UpdateOptions
+    from oss_cad_mcp.suite_update import update_suite as run_update
+
+    options = UpdateOptions(
+        path=path,
+        check=check,
+        force=force,
+        keep_backup=not no_backup,
+        resume=not no_resume,
+        release_tag=release_tag,
+        validate_runtime=not no_validate,
+        timeout_s=timeout,
+    )
+    try:
+        result = run_update(options)
+    except (UpdateError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    except KeyboardInterrupt as exc:
+        typer.echo("Interrupted; a partial download may remain for resume.", err=True)
+        raise typer.Exit(130) from exc
+    typer.echo(result.message)
+
+
 def main() -> None:
     app()
 
