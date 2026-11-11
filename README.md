@@ -84,6 +84,43 @@ The server speaks stdio by default. A generic client entry looks like:
 Use the equivalent local-MCP entry for your client. The workspace defaults to the
 server's current directory when `OSS_CAD_MCP_WORKSPACE` is not set.
 
+## Updating OSS CAD Suite
+
+OSS CAD Suite publishes daily pre-built releases. The updater downloads the asset
+matching the current platform, verifies the release SHA-256, extracts to a staging
+directory, runs a `yosys -V` sanity check, and swaps the installation atomically.
+The previous installation is kept as a timestamped backup by default.
+
+The install path is the suite root, normally `.../oss-cad-suite`:
+
+```bash
+# Explicit path: install or update this suite root
+./scripts/update-oss-cad-suite.sh ~/Kits/oss-cad-suite
+
+# Or through the project package
+uv run oss-cad-mcp update-suite ~/Kits/oss-cad-suite
+
+# Check only; no download
+./scripts/update-oss-cad-suite.sh --check ~/Kits/oss-cad-suite
+
+# No path: use OSS_CAD_SUITE_ROOT, or detect the suite containing
+# the first yosys found on PATH, and overwrite it in place.
+./scripts/update-oss-cad-suite.sh
+
+# Pin a specific daily release
+./scripts/update-oss-cad-suite.sh --release-tag 2026-11-11 ~/Kits/oss-cad-suite
+```
+
+The standalone script is stdlib-only and can run before `uv sync`. Supported
+assets are `linux-x64`, `linux-arm64`, `darwin-x64`, and `darwin-arm64`. Native
+Windows is rejected; use WSL2, which uses `linux-x64`. The updater keeps a
+partial `.part` file for interrupted downloads and resumes automatically.
+
+After an update, restart your MCP client/server so the running process picks up
+the new binaries. To remove the backup after a successful update, pass
+`--no-backup`. To replace a non-empty directory that is not an OSS CAD Suite,
+pass `--force`.
+
 ## Tool surface
 
 ### Workflows
