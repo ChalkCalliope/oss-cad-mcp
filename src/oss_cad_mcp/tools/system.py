@@ -140,6 +140,11 @@ def build_status(app: AppContext, *, deep: bool = False) -> StatusReport:
         workspace=str(app.workspace),
         profile=app.settings.profile,
         tools_present=app.registry.count() if app.registry else 0,
+        tools_missing=[
+            name
+            for name in ("yosys", "verilator", "iverilog", "slang", "sby", "nextpnr-ice40", "icepack")
+            if not suite.has(name)
+        ],
         capabilities=_capabilities(app),
         toolchain=ToolchainInfo(
             cxx=host.cxx,
@@ -271,6 +276,18 @@ async def cad_tool_help(ctx: Context, request: ToolHelpRequest) -> ToolHelp:
 async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
     """Run an allowlisted suite binary with argv. Prefer high-level workflows."""
     app = get_app(ctx)
+    if not app.settings.allow_raw:
+        return ToolRunReport(
+            ok=False,
+            tool=request.tool,
+            job=app.jobs.create("tool").to_ref(),
+            error=ErrorInfo(
+                code="raw_disabled",
+                message="Raw tool execution is disabled by configuration.",
+                hint="Use the high-level workflows or set allow_raw=true.",
+            ),
+            summary="Raw tool execution is disabled.",
+        )
     registry = app.require_registry()
     entry = registry.get(request.tool)
     if entry.hardware:

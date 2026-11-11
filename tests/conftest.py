@@ -6,6 +6,7 @@ import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -79,7 +80,7 @@ def app(settings: Settings) -> Iterator[AppContext]:
     asyncio.run(context.jobs.shutdown())
 
 
-def make_ctx(app: AppContext):
+def make_ctx(app: AppContext) -> Any:
     """Minimal Context stand-in for calling tool functions directly."""
 
     return SimpleNamespace(request_context=SimpleNamespace(lifespan_context=app))

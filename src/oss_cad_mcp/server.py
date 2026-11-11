@@ -34,6 +34,8 @@ Prefer intent-level tools over raw commands:
   the 155-binary catalog.
 
 Use cad_tool_run only when no workflow fits. Do not guess CLI flags; use cad_tool_help.
+Each tool accepts one nested `request` object matching its published schema; for example
+`cad_status` is called with `{"request": {"deep": false}}`.
 Read artifact paths instead of re-running expensive tools. Hardware programming is
 intentionally disabled in v0.1. Verified platform: Ubuntu 26.04 on WSL2 x86_64;
 macOS and native Linux are not verified for full support.

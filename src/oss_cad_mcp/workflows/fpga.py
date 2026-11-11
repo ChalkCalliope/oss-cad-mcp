@@ -64,8 +64,11 @@ async def run_fpga_build(
         )
     if not device:
         raise InvalidInput("An FPGA device is required.", hint="Example: device='up5k' for iCE40.")
-    if family == "ecp5" and not package:
-        raise InvalidInput("ECP5 builds require a package, e.g. package='CABGA381'.")
+    if not package:
+        raise InvalidInput(
+            "A package is required for place-and-route.",
+            hint="Example: package='sg48' for iCE40 or 'CABGA381' for ECP5.",
+        )
     if not frequency_mhz:
         frequency_mhz = project.target.frequency_mhz if project and project.target.frequency_mhz else 25.0
     constraint_patterns = constraints or (project.target.constraints if project else [])

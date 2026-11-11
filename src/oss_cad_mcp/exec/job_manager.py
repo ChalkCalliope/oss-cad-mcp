@@ -204,15 +204,20 @@ class JobManager:
                     for item in data.get("steps", [])
                     if isinstance(item, dict)
                 ]
+                status = str(data.get("status", "interrupted"))
+                if status in {"pending", "running"}:
+                    status = "interrupted"
+                    ended = ended or utcnow()
                 job = Job(
                     id=job_id,
                     kind=str(data.get("kind", "unknown")),
                     work_dir=path.parent,
                     created_at=created,
-                    status=str(data.get("status", "interrupted")),  # type: ignore[arg-type]
+                    status=status,  # type: ignore[arg-type]
                     started_at=started,
                     ended_at=ended,
-                    summary=data.get("summary"),
+                    summary=data.get("summary")
+                    or ("Server restarted while the job was running." if status == "interrupted" else None),
                     command=[str(arg) for arg in data.get("command", [])],
                     cwd=data.get("cwd"),
                     error=ErrorInfo.model_validate(data["error"]) if data.get("error") else None,
