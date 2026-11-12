@@ -12,6 +12,7 @@ from rich.console import Console
 from oss_cad_mcp import __version__
 from oss_cad_mcp.app import build_app
 from oss_cad_mcp.config import load_settings
+from oss_cad_mcp.errors import CadError
 from oss_cad_mcp.server import create_server
 from oss_cad_mcp.tools.system import build_status
 
@@ -108,7 +109,14 @@ def catalog_command(
     """Search the OSS CAD Suite tool catalog."""
     settings = load_settings(config_file=config_file, suite_root=suite_root, workspace=workspace)
     ctx = build_app(settings)
-    registry = ctx.require_registry()
+    try:
+        registry = ctx.require_registry()
+    except CadError as exc:
+        console.print(f"[red]error:[/red] {exc.message}")
+        if exc.hint:
+            console.print(f"[yellow]hint:[/yellow] {exc.hint}")
+        asyncio.run(ctx.jobs.shutdown())
+        raise typer.Exit(1) from exc
     entries = registry.search(
         query,
         family=family,
@@ -136,7 +144,13 @@ def tool_help_command(
     ctx = build_app(settings)
 
     async def run() -> None:
-        help_info = await ctx.require_registry().help(tool)
+        try:
+            help_info = await ctx.require_registry().help(tool)
+        except CadError as exc:
+            typer.echo(f"error: {exc.message}", err=True)
+            if exc.hint:
+                typer.echo(f"hint: {exc.hint}", err=True)
+            raise typer.Exit(1) from exc
         typer.echo(f"{help_info.tool}: {help_info.summary}")
         if help_info.version:
             typer.echo(f"version: {help_info.version}")

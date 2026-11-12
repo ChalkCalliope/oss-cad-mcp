@@ -33,7 +33,8 @@ Prefer intent-level tools over raw commands:
 - cad_tool_search / cad_tool_help / cad_tool_run: progressive disclosure for the rest of
   the 155-binary catalog.
 
-Use cad_tool_run only when no workflow fits. Do not guess CLI flags; use cad_tool_help.
+Use cad_tool_run only when no workflow fits. Raw execution is disabled by default; enable
+`allow_raw` only for trusted projects, and do not guess CLI flags (use cad_tool_help).
 Each tool accepts one nested `request` object matching its published schema; for example
 `cad_status` is called with `{"request": {"deep": false}}`.
 Read artifact paths instead of re-running expensive tools. Hardware programming is

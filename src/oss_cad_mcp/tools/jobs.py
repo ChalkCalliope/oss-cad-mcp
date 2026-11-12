@@ -175,6 +175,22 @@ async def cad_artifact(ctx: Context, request: ArtifactRequest) -> ArtifactAction
                 total_bytes=len(data),
                 summary=f"{app.paths.display(path)} ({len(data)} bytes).",
             )
+        mime = app.artifacts.mime_type(path)
+        if request.action == "read_text" and not app.artifacts.is_text_mime(mime):
+            return ArtifactActionReport(
+                ok=False,
+                action=request.action,
+                job=job.to_ref() if job else None,
+                total_bytes=len(data),
+                value=digest,
+                error=ErrorInfo(
+                    code="binary_artifact",
+                    message=f"{app.paths.display(path)} is {mime}, not a text file.",
+                    hint="Use action='stat' or action='hash' for binary artifacts.",
+                    details={"path": app.paths.display(path), "mime_type": mime},
+                ),
+                summary="Binary artifact cannot be read as text.",
+            )
         text = data[request.offset : request.offset + request.max_bytes].decode("utf-8", errors="replace")
         return ArtifactActionReport(
             ok=True,
@@ -234,8 +250,13 @@ async def cad_artifact(ctx: Context, request: ArtifactRequest) -> ArtifactAction
         action=request.action,
         error=ErrorInfo(
             code="artifact_not_found",
-            message="No matching artifact or path was provided.",
+            message=(
+                f"Artifact {request.artifact_id!r} was not found."
+                if request.artifact_id
+                else "No matching artifact or path was provided."
+            ),
             hint="Use cad_artifact(action='list', job_id=...) first.",
+            details={"job_id": request.job_id, "artifact_id": request.artifact_id, "path": request.path},
         ),
         summary="Artifact not found.",
     )

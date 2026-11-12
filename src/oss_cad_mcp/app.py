@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from oss_cad_mcp.config import Settings
@@ -26,6 +26,7 @@ class AppContext:
     suite: Suite | None = None
     registry: Catalog | None = None
     suite_error: str | None = None
+    _synth_commands: dict[str, bool] = field(default_factory=dict, repr=False)
 
     def require_suite(self) -> Suite:
         if self.suite is None:
@@ -35,6 +36,16 @@ class AppContext:
                 details={"error": self.suite_error},
             )
         return self.suite
+
+    def supports_synth_command(self, command: str) -> bool:
+        cached = self._synth_commands.get(command)
+        if cached is not None:
+            return cached
+        suite = self.require_suite()
+        _, text = suite.run_text("yosys", ["-Q", "-p", f"help {command}"], timeout=15.0)
+        supported = "No such command" not in text
+        self._synth_commands[command] = supported
+        return supported
 
     def require_registry(self) -> Catalog:
         self.require_suite()

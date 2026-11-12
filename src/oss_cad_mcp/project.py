@@ -159,6 +159,16 @@ def _formal_like(name: str, path: Path) -> bool:
     )
 
 
+def unit_instantiates(path: Path, unit: str) -> bool:
+    """Return True when the HDL file at *path* instantiates *unit*."""
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return unit in (_instantiated_names(text, {unit}) | _instantiated_entities(text, {unit}))
+
+
 def _clocks(text: str) -> list[str]:
     clocks = re.findall(r"\b(?:posedge|negedge)\s+([A-Za-z_]\w*)", text)
     clocks.extend(re.findall(r"\balways_ff\s*@\s*\(\s*(?:posedge|negedge)\s+([A-Za-z_]\w*)", text))
@@ -201,27 +211,55 @@ def inspect_project(
 
     module_names = set(modules)
     entity_names = set(entities)
-    instantiated: set[str] = set()
-    for text in text_by_file.values():
-        instantiated |= _instantiated_names(text, module_names)
-        instantiated |= _instantiated_entities(text, entity_names)
-
     units: dict[str, Path] = {**modules, **entities}
     testbenches = {
         name for name, path in units.items() if _testbench_like(name, path) or _testbench_like(path.stem, path)
     }
     formal_units = {name for name, path in units.items() if _formal_like(name, path) or _formal_like(path.stem, path)}
+    testbench_paths = {units[name] for name in testbenches}
+    formal_paths = {units[name] for name in formal_units}
+
+    def _instantiated(text: str) -> set[str]:
+        return _instantiated_names(text, module_names) | _instantiated_entities(text, entity_names)
+
+    instantiated_in_sources: set[str] = set()
+    for path, text in text_by_file.items():
+        if path in testbench_paths or path in formal_paths:
+            continue
+        instantiated_in_sources |= _instantiated(text)
+
+    instantiated_anywhere: set[str] = set()
+    for _path, text in text_by_file.items():
+        instantiated_anywhere |= _instantiated(text)
+
     candidates = [
-        name for name in units if name not in instantiated and name not in testbenches and name not in formal_units
+        name
+        for name in units
+        if name not in instantiated_in_sources and name not in testbenches and name not in formal_units
     ]
     if not candidates:
+        candidates = [
+            name
+            for name in units
+            if name not in instantiated_anywhere and name not in testbenches and name not in formal_units
+        ]
+    if not candidates:
         candidates = [name for name in units if name not in testbenches and name not in formal_units]
+
+    def _child_count(name: str) -> int:
+        path = units.get(name)
+        text = text_by_file.get(path) if path else ""
+        return len(_instantiated(text) & set(units)) if text else 0
+
+    candidates = sorted(candidates, key=lambda name: (-_child_count(name), name))
     if config and config.top and config.top in units:
         candidates = [config.top, *(name for name in candidates if name != config.top)]
     top_candidates = list(dict.fromkeys(candidates))
-    testbench_paths = {units[name] for name in testbenches}
-    formal_paths = {units[name] for name in formal_units}
-    source_files = [paths.display(path) for path in files if path not in testbench_paths and path not in formal_paths]
+    source_files = [
+        paths.display(path)
+        for path in files
+        if path not in testbench_paths and path not in formal_paths and path.suffix.lower() not in {".vh", ".svh"}
+    ]
     testbench_files = [paths.display(path) for path in files if path in testbench_paths]
     formal_files = [paths.display(path) for path in files if path in formal_paths]
 
@@ -246,8 +284,10 @@ def inspect_project(
         )
     ]
 
-    all_text = "\n".join(text_by_file.values())
-    clocks = _clocks(all_text)
+    source_text = "\n".join(
+        text for path, text in text_by_file.items() if path not in testbench_paths and path not in formal_paths
+    )
+    clocks = _clocks(source_text)
     warnings: list[str] = []
     if not files:
         warnings.append("No HDL files were found under the project root.")
@@ -272,6 +312,8 @@ def inspect_project(
         languages=sorted(languages),
         top_candidates=top_candidates,
         testbenches=sorted(set(testbenches)),
+        testbench_units={name: paths.display(path) for name, path in units.items() if name in testbenches},
+        formal_units=sorted(formal_units),
         modules=sorted(modules),
         entities=sorted(entities),
         constraints=constraints,
@@ -294,7 +336,27 @@ class ResolvedSources:
     warnings: list[str] = field(default_factory=list)
 
 
-def parse_filelist(path: Path, missing: list[Path] | None = None) -> tuple[list[Path], list[Path], dict[str, str]]:
+def parse_filelist(
+    path: Path,
+    *,
+    paths: PathPolicy,
+    missing: list[Path] | None = None,
+    seen: set[Path] | None = None,
+    depth: int = 0,
+) -> tuple[list[Path], list[Path], dict[str, str]]:
+    if depth > 32:
+        raise InvalidInput(
+            f"Filelist nesting is too deep: {path}",
+            hint="Flatten the -f includes or remove a recursive filelist reference.",
+        )
+    resolved_path = path.resolve()
+    visited = seen if seen is not None else set()
+    if resolved_path in visited:
+        raise InvalidInput(
+            f"Recursive filelist reference: {path}",
+            hint="Remove the self-referential -f entry.",
+        )
+    visited.add(resolved_path)
     files: list[Path] = []
     includes: list[Path] = []
     defines: dict[str, str] = {}
@@ -310,7 +372,7 @@ def parse_filelist(path: Path, missing: list[Path] | None = None) -> tuple[list[
         if line.startswith("+incdir+"):
             for item in line[len("+incdir+") :].split("+"):
                 if item:
-                    includes.append((base / item).resolve())
+                    includes.append(paths.resolve_read(item, base=base, must_exist=False))
             continue
         if line.startswith("+define+"):
             body = line[len("+define+") :]
@@ -321,7 +383,7 @@ def parse_filelist(path: Path, missing: list[Path] | None = None) -> tuple[list[
                 defines[name] = value or "1"
             continue
         if line.startswith("-I"):
-            includes.append((base / line[2:].strip()).resolve())
+            includes.append(paths.resolve_read(line[2:].strip(), base=base, must_exist=False))
             continue
         if line.startswith("-D"):
             body = line[2:].strip()
@@ -329,9 +391,11 @@ def parse_filelist(path: Path, missing: list[Path] | None = None) -> tuple[list[
             defines[name] = value or "1"
             continue
         if line.startswith("-f "):
-            nested = (base / line[3:].strip()).resolve()
+            nested = paths.resolve_read(line[3:].strip(), base=base, must_exist=False)
             if nested.is_file():
-                n_files, n_includes, n_defines = parse_filelist(nested, missing=missing)
+                n_files, n_includes, n_defines = parse_filelist(
+                    nested, paths=paths, missing=missing, seen=visited, depth=depth + 1
+                )
                 files.extend(n_files)
                 includes.extend(n_includes)
                 defines.update(n_defines)
@@ -342,7 +406,7 @@ def parse_filelist(path: Path, missing: list[Path] | None = None) -> tuple[list[
             # Unsupported filelist options (for example +libext+ or -y) are
             # ignored rather than being mistaken for missing source files.
             continue
-        candidate = (base / line).resolve()
+        candidate = paths.resolve_read(line, base=base, must_exist=False)
         if candidate.is_file():
             files.append(candidate)
         elif missing is not None:
@@ -368,7 +432,7 @@ def resolve_sources(
     if source.filelist:
         filelist = paths.resolve_read(source.filelist, must_exist=True)
         missing: list[Path] = []
-        files, includes, defines = parse_filelist(filelist, missing=missing)
+        files, includes, defines = parse_filelist(filelist, paths=paths, missing=missing)
         if missing:
             names = ", ".join(str(path) for path in missing[:10])
             suffix = f" (and {len(missing) - 10} more)" if len(missing) > 10 else ""

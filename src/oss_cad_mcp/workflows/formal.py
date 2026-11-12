@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Literal
 
 from oss_cad_mcp.app import AppContext
-from oss_cad_mcp.errors import InvalidInput, PreflightFailed
+from oss_cad_mcp.errors import CadError, InvalidInput, PreflightFailed
 from oss_cad_mcp.models.common import ErrorInfo, SourceSet
+from oss_cad_mcp.models.project import FormalConfig
 from oss_cad_mcp.models.results import VerificationReport
 from oss_cad_mcp.parsers import sby as sby_parser
 from oss_cad_mcp.project import inspect_project, load_project_config, resolve_sources
-from oss_cad_mcp.workflows.common import read_tail, run_tool, work_path
+from oss_cad_mcp.workflows.common import run_tool, step_text, work_path
 
 VerifyMode = Literal["prove", "bmc", "cover", "equiv", "mutation"]
 
@@ -27,15 +28,17 @@ def _resolve_top(app: AppContext, project, source: SourceSet | None, top: str | 
         return top
     if source and source.top:
         return source.top
-    if project and project.formal:
-        profile = inspect_project(app.workspace, paths=app.paths)
-        if profile.top_candidates:
-            return profile.top_candidates[0]
+    if project and project.formal and project.formal.top:
+        return project.formal.top
+    if project and project.top:
+        return project.top
     profile = inspect_project(app.workspace, paths=app.paths)
-    if profile.testbenches:
-        return profile.testbenches[0]
+    if profile.formal_units:
+        return profile.formal_units[0]
     if profile.top_candidates:
         return profile.top_candidates[0]
+    if profile.testbenches:
+        return profile.testbenches[0]
     raise InvalidInput("No top module was specified or detected for verification.")
 
 
@@ -43,25 +46,37 @@ async def run_verify(
     app: AppContext,
     job,
     *,
-    mode: VerifyMode = "prove",
+    mode: VerifyMode | None = None,
     source: SourceSet | None = None,
     top: str | None = None,
-    engine: str = "smtbmc",
-    depth: int = 20,
+    engine: str | None = None,
+    depth: int | None = None,
     config_file: str | None = None,
     timeout_s: float = 600.0,
     expect_fail: bool = False,
 ) -> VerificationReport:
     suite = app.require_suite()
-    if mode in {"equiv", "mutation"}:
+    project, _ = load_project_config(app.workspace)
+    if mode is None and config_file:
+        suffix = Path(config_file).suffix.lower()
+        if suffix == ".eqy":
+            mode = "equiv"
+        elif suffix == ".mcy":
+            mode = "mutation"
+    formal_cfg = project.formal if project else FormalConfig()
+    resolved_mode: VerifyMode = mode or formal_cfg.mode
+    resolved_depth = depth or formal_cfg.depth
+    resolved_engine = engine or formal_cfg.engine
+    if resolved_mode in {"equiv", "mutation"}:
         if not config_file:
             raise InvalidInput(
-                f"{mode} verification requires an existing configuration file in v0.1.",
+                f"{resolved_mode} verification requires an existing configuration file in v0.1.",
                 hint="Pass config_file for EQY (.eqy) or MCY runs.",
             )
-        return await _run_config_tool(app, job, mode=mode, config_file=config_file, timeout_s=timeout_s)
+        return await _run_config_tool(app, job, mode=resolved_mode, config_file=config_file, timeout_s=timeout_s)
 
-    project, _ = load_project_config(app.workspace)
+    if (source is None or (not source.files and not source.filelist)) and project and project.formal.sources:
+        source = SourceSet(files=list(project.formal.sources), language=project.language)
     if config_file:
         config = app.paths.resolve_read(config_file, must_exist=True)
         run_dir = work_path(job, "sby")
@@ -76,6 +91,8 @@ async def run_verify(
             raise PreflightFailed("SBY is not installed in this suite.")
         try:
             resolved = resolve_sources(source, project=project, paths=app.paths)
+        except CadError:
+            raise
         except Exception as exc:
             raise InvalidInput(str(exc), hint="Check source globs and project configuration.") from exc
         if not resolved.files:
@@ -102,11 +119,11 @@ async def run_verify(
         config_text = "\n".join(
             [
                 "[options]",
-                f"mode {mode}",
-                f"depth {depth}",
+                f"mode {resolved_mode}",
+                f"depth {resolved_depth}",
                 "" if not expect_fail else "expect fail",
                 "[engines]",
-                engine,
+                resolved_engine,
                 "",
                 "[script]",
                 *script_lines,
@@ -130,7 +147,7 @@ async def run_verify(
         )
         work_root = run_dir
 
-    log_text = _step_log(job, "sby")
+    log_text = step_text(job, "sby")
     status, engine_name = sby_parser.parse_summary(log_text)
     properties = []
     status_result = await run_tool(
@@ -143,7 +160,7 @@ async def run_verify(
         step_name="sby-status",
     )
     if status_result.exit_code == 0:
-        status_text = _step_log(job, "sby-status")
+        status_text = step_text(job, "sby-status")
         properties = sby_parser.parse_status_jsonl(status_text)
     if not properties:
         status_jsonl = _status_jsonl(work_root)
@@ -164,8 +181,25 @@ async def run_verify(
         if trace_path
         else None
     )
+    assert_failures = [prop for prop in properties if prop.status == "FAIL" and (prop.kind or "").upper() != "COVER"]
+    cover_failures = [prop for prop in properties if prop.status != "PASS" and (prop.kind or "").upper() == "COVER"]
     error = None
-    if not ok and status != "failed":
+    summary = f"Formal {resolved_mode} {status} ({len(properties)} property statuses)."
+    if not ok and status == "failed" and cover_failures and not assert_failures:
+        summary = f"Formal {resolved_mode} failed: {len(cover_failures)} cover(s) unreachable."
+        error = ErrorInfo(
+            code="verification_failed",
+            message=summary,
+            hint="Covers are reachability goals; add constraints or reduce the depth if they should be reachable.",
+        )
+    elif not ok and status == "failed" and assert_failures:
+        summary = f"Formal {resolved_mode} failed: {len(assert_failures)} assertion(s) failed."
+        error = ErrorInfo(
+            code="verification_failed",
+            message=summary,
+            hint="Inspect the counterexample trace and the SBY log.",
+        )
+    elif not ok and status != "failed":
         error = ErrorInfo(
             code="verification_failed",
             message=f"SBY exited with code {result.exit_code} and status {status}.",
@@ -173,17 +207,17 @@ async def run_verify(
         )
     return VerificationReport(
         ok=ok,
-        mode=mode,
+        mode=resolved_mode,
         status=status,  # type: ignore[arg-type]
-        engine=engine_name or engine,
-        depth=depth,
+        engine=engine_name or resolved_engine,
+        depth=resolved_depth,
         properties=properties,
         trace=trace,
         log_tail=log_text[-16_384:],
         job=job.to_ref(),
         artifacts=[trace] if trace else [],
         error=error,
-        summary=f"Formal {mode} {status} ({len(properties)} property statuses).",
+        summary=summary,
     )
 
 
@@ -191,30 +225,59 @@ async def _run_config_tool(
     app: AppContext, job, *, mode: str, config_file: str, timeout_s: float
 ) -> VerificationReport:
     config = app.paths.resolve_read(config_file, must_exist=True)
-    tool = "eqy" if mode == "equiv" else "mcy"
+    if mode == "mutation":
+        return VerificationReport(
+            ok=False,
+            mode=mode,
+            status="error",
+            engine="mcy",
+            job=job.to_ref(),
+            error=ErrorInfo(
+                code="not_supported",
+                message="MCY mutation verification is not supported by cad_verify in v0.1.",
+                hint=("Run mcy init/run yourself with cad_tool_run, or use an SBY harness for property verification."),
+            ),
+            summary="MCY mutation verification is not supported in v0.1.",
+        )
+    tool = "eqy"
     if not app.require_suite().has(tool):
         raise PreflightFailed(f"{tool} is not installed in this suite.")
-    args = [str(config)]
+    run_dir = work_path(job, "eqy")
+    args = ["-d", str(run_dir), "-f", str(config)]
     result = await run_tool(app, job, name=tool, args=args, cwd=config.parent, timeout_s=timeout_s, step_name=tool)
-    log_text = _step_log(job, tool)
-    ok = result.exit_code == 0
+    log_text = step_text(job, tool)
+    pass_file = run_dir / "PASS"
+    fail_file = run_dir / "FAIL"
+    if pass_file.exists():
+        status = "passed"
+    elif fail_file.exists():
+        status = "failed"
+    else:
+        status = "passed" if result.exit_code == 0 else "failed"
+    ok = result.exit_code == 0 and status == "passed"
+    artifacts = []
+    logfile = run_dir / "logfile.txt"
+    if logfile.exists():
+        artifacts.append(app.artifacts.register(job, logfile, kind="report", description="EQY proof log"))
+    error = None
+    if not ok:
+        error = ErrorInfo(
+            code="verification_failed",
+            message=f"EQY {status} (exit {result.exit_code}).",
+            hint="Inspect the EQY log and the work directory for partition details.",
+            details={"work_dir": str(run_dir), "log_tail": log_text[-4_000:]},
+        )
     return VerificationReport(
         ok=ok,
         mode=mode,
-        status="passed" if ok else "failed",
+        status=status,  # type: ignore[arg-type]
         engine=tool,
         log_tail=log_text[-16_384:],
         job=job.to_ref(),
-        summary=f"{tool} {'passed' if ok else 'failed'} (exit {result.exit_code}).",
-        error=None if ok else ErrorInfo(code="verification_failed", message=f"{tool} exited {result.exit_code}."),
+        artifacts=artifacts,
+        error=error,
+        summary=f"{tool} {status} (exit {result.exit_code}).",
     )
-
-
-def _step_log(job, name: str) -> str:
-    for step in reversed(job.steps):
-        if step.name == name and step.stdout:
-            return read_tail(Path(step.stdout), max_bytes=4_000_000)
-    return ""
 
 
 def _status_jsonl(work_root: Path) -> str:

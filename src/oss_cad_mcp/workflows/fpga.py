@@ -32,6 +32,7 @@ async def run_fpga_build(
     speed: str | None = None,
     constraints: list[str] | None = None,
     allow_unconstrained: bool = False,
+    allow_timing_fail: bool = False,
     frequency_mhz: float | None = None,
     seed: int | None = None,
     placer: str | None = None,
@@ -40,19 +41,34 @@ async def run_fpga_build(
 ) -> FpgaBuildReport:
     suite = app.require_suite()
     project, _ = load_project_config(app.workspace)
-    preset = get_board(board) if board else None
-    if board and preset is None:
+    project_target = project.target if project else None
+    selected_board = board or (project_target.board if project_target else None)
+    preset = get_board(selected_board) if selected_board else None
+    if selected_board and preset is None:
         raise InvalidInput(
-            f"Unknown board preset: {board}", hint="Use cad_status or the board catalog for known presets."
+            f"Unknown board preset: {selected_board}",
+            hint="Use cad_status or the board catalog for known presets.",
         )
-    if preset:
-        family = preset.family  # type: ignore[assignment]
+    if board and preset is not None:
+        # An explicit request board is authoritative; its preset supplies any
+        # fields the request omitted. Project target fields are not mixed in.
+        family = family or preset.family  # type: ignore[assignment]
         device = device or preset.device
         package = package or preset.package
         speed = speed or preset.speed
-        frequency_mhz = frequency_mhz or preset.default_frequency_mhz
-    if family is None and project and project.target.family:
-        family = project.target.family  # type: ignore[assignment]
+        if frequency_mhz is None:
+            frequency_mhz = preset.default_frequency_mhz
+    else:
+        family = family or (project_target.family if project_target else None) or (preset.family if preset else None)  # type: ignore[assignment]
+        device = device or (project_target.device if project_target else None) or (preset.device if preset else None)
+        package = (
+            package or (project_target.package if project_target else None) or (preset.package if preset else None)
+        )
+        speed = speed or (project_target.speed if project_target else None) or (preset.speed if preset else None)
+        if frequency_mhz is None:
+            frequency_mhz = (project_target.frequency_mhz if project_target else None) or (
+                preset.default_frequency_mhz if preset else None
+            )
     if family is None:
         raise InvalidInput(
             "An FPGA family or board is required.",
@@ -71,9 +87,15 @@ async def run_fpga_build(
             hint="Example: package='sg48' for iCE40 or 'CABGA381' for ECP5.",
         )
     if not frequency_mhz:
-        frequency_mhz = project.target.frequency_mhz if project and project.target.frequency_mhz else 25.0
-    constraint_patterns = constraints or (project.target.constraints if project else [])
+        frequency_mhz = 25.0
+    constraint_patterns = constraints or (project_target.constraints if project_target else [])
     constraint_paths = [app.paths.resolve_read(item, must_exist=True) for item in constraint_patterns]
+    if len(constraint_paths) > 1:
+        raise InvalidInput(
+            "nextpnr accepts one constraint file per build; pass only one PCF/LPF.",
+            hint="Merge the constraint files into one, or pass a single file for this build.",
+            details={"constraints": [str(path) for path in constraint_paths]},
+        )
     if not constraint_paths and not allow_unconstrained:
         raise InvalidInput(
             "A physical constraint file is required for PnR.",
@@ -100,11 +122,14 @@ async def run_fpga_build(
         target=family,  # type: ignore[arg-type]
         timeout_s=timeout_s,
     )
+    synth_step = next((step for step in job.steps if step.name == "synth"), None)
     stages = [
         StageReport(
             name="synth",
             tool="yosys",
             ok=synth_report.ok,
+            exit_code=synth_step.exit_code if synth_step else None,
+            duration_s=synth_step.duration_s if synth_step else 0.0,
             summary=synth_report.summary,
         )
     ]
@@ -143,7 +168,7 @@ async def run_fpga_build(
         ]
         if constraint_paths:
             pnr_args.extend(["--pcf", str(constraint_paths[0])])
-        else:
+        if allow_unconstrained:
             pnr_args.append("--pcf-allow-unconstrained")
         if seed is not None:
             pnr_args.extend(["--seed", str(seed)])
@@ -171,7 +196,7 @@ async def run_fpga_build(
         ]
         if constraint_paths:
             pnr_args.extend(["--lpf", str(constraint_paths[0])])
-        else:
+        if allow_unconstrained:
             pnr_args.append("--lpf-allow-unconstrained")
         if seed is not None:
             pnr_args.extend(["--seed", str(seed)])
@@ -195,23 +220,74 @@ async def run_fpga_build(
             summary=f"{pnr_tool} exited {pnr_result.exit_code}.",
         )
     )
+    timing_preparsed = None
+    utilization_preparsed: dict = {}
+    timing_failure_error: ErrorInfo | None = None
     if pnr_result.exit_code != 0:
-        return FpgaBuildReport(
-            ok=False,
-            family=family,
-            device=device,
-            package=package,
-            speed=speed,
-            top=synth_report.top,
-            stages=stages,
-            job=job.to_ref(),
-            error=ErrorInfo(
-                code="pnr_failed",
-                message=f"{pnr_tool} failed with exit code {pnr_result.exit_code}.",
-                hint="Inspect the place-and-route log for timing or constraint errors.",
-            ),
-            summary="FPGA build stopped after place-and-route failed.",
-        )
+        if report_path.exists():
+            try:
+                timing_preparsed, utilization_preparsed = nextpnr_parser.parse_report(report_path, source="nextpnr")
+            except Exception:
+                timing_preparsed = None
+                utilization_preparsed = {}
+        if timing_preparsed is not None and timing_preparsed.met is False:
+            achieved = timing_preparsed.max_frequency_mhz
+            message = "FPGA build completed with timing failure."
+            if achieved is not None:
+                message = (
+                    f"FPGA build completed with timing failure: "
+                    f"{achieved:.2f} MHz achieved vs {frequency_mhz:.2f} MHz requested."
+                )
+            timing_failure_error = ErrorInfo(
+                code="timing_failed",
+                message=message,
+                hint="Inspect the timing report and critical paths, or lower frequency_mhz.",
+            )
+            if not allow_timing_fail:
+                artifacts = []
+                if report_path.exists():
+                    artifacts.append(
+                        app.artifacts.register(
+                            job, report_path, kind="report", description="nextpnr timing/utilization report"
+                        )
+                    )
+                if asc_path.exists():
+                    artifacts.append(
+                        app.artifacts.register(job, asc_path, kind="netlist", description="nextpnr placement output")
+                    )
+                return FpgaBuildReport(
+                    ok=False,
+                    family=family,
+                    device=device,
+                    package=package,
+                    speed=speed,
+                    top=synth_report.top,
+                    stages=stages,
+                    utilization=utilization_preparsed,
+                    timing=timing_preparsed,
+                    timing_met=False,
+                    job=job.to_ref(),
+                    artifacts=artifacts,
+                    error=timing_failure_error,
+                    summary="FPGA build stopped after place-and-route timing failure.",
+                )
+        else:
+            return FpgaBuildReport(
+                ok=False,
+                family=family,
+                device=device,
+                package=package,
+                speed=speed,
+                top=synth_report.top,
+                stages=stages,
+                job=job.to_ref(),
+                error=ErrorInfo(
+                    code="pnr_failed",
+                    message=f"{pnr_tool} failed with exit code {pnr_result.exit_code}.",
+                    hint="Inspect the place-and-route log for timing or constraint errors.",
+                ),
+                summary="FPGA build stopped after place-and-route failed.",
+            )
 
     bitstream_path = build_root / ("design.bin" if family == "ice40" else "design.bit")
     if family == "ice40":
@@ -249,7 +325,10 @@ async def run_fpga_build(
             summary="FPGA build stopped after packing failed.",
         )
 
-    timing, utilization = nextpnr_parser.parse_report(report_path, source="nextpnr")
+    if timing_preparsed is not None:
+        timing, utilization = timing_preparsed, utilization_preparsed
+    else:
+        timing, utilization = nextpnr_parser.parse_report(report_path, source="nextpnr")
     if family == "ice40" and suite.has("icetime") and asc_path.exists():
         timing_json = build_root / "icetime.json"
         ice_args = ["-d", device, "-j", str(timing_json), str(asc_path)]
@@ -273,11 +352,18 @@ async def run_fpga_build(
     ok = all(stage.ok for stage in stages) and timing.met is not False
     error = None
     if not ok:
-        error = ErrorInfo(
-            code="timing_failed" if timing.met is False else "fpga_build_failed",
-            message="FPGA build completed with timing failure." if timing.met is False else "FPGA build failed.",
-            hint="Inspect the timing report and critical paths.",
-        )
+        if timing.met is False:
+            error = timing_failure_error or ErrorInfo(
+                code="timing_failed",
+                message="FPGA build completed with timing failure.",
+                hint="Inspect the timing report and critical paths.",
+            )
+        else:
+            error = ErrorInfo(
+                code="fpga_build_failed",
+                message="FPGA build failed.",
+                hint="Inspect the timing report and stage logs.",
+            )
     return FpgaBuildReport(
         ok=ok,
         family=family,

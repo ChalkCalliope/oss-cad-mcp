@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from oss_cad_mcp.errors import InvalidInput
+from oss_cad_mcp.errors import InvalidInput, PathNotAllowed
 from oss_cad_mcp.exec.paths import PathPolicy
 from oss_cad_mcp.models.common import SourceSet
 from oss_cad_mcp.project import inspect_project, parse_filelist, resolve_sources
@@ -38,7 +38,7 @@ def test_filelist_parser(tmp_path: Path) -> None:
         )
     )
     (tmp_path / "nested" / "extra.f").write_text("b.sv")
-    files, includes, defines = parse_filelist(filelist)
+    files, includes, defines = parse_filelist(filelist, paths=PathPolicy.create(tmp_path))
     assert {path.name for path in files} == {"a.sv", "b.sv"}
     assert includes and includes[0].name == "include"
     assert defines == {"SYNTHESIS": "1"}
@@ -148,3 +148,114 @@ def test_project_root_under_build_directory(tmp_path: Path) -> None:
 
     assert profile.hdl_files == ["rtl/top.v"]
     assert profile.top_candidates == ["top"]
+
+
+def _write_outside(tmp_path: Path) -> tuple[Path, Path]:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    outside = tmp_path / "outside.v"
+    outside.write_text("module outside; endmodule\n", encoding="utf-8")
+    return workspace, outside
+
+
+def test_filelist_rejects_absolute_outside_file(tmp_path: Path) -> None:
+    workspace, outside = _write_outside(tmp_path)
+    filelist = workspace / "files.f"
+    filelist.write_text(f"{outside}\n", encoding="utf-8")
+
+    with pytest.raises(PathNotAllowed):
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="verilog"),
+            project=None,
+            paths=PathPolicy.create(workspace),
+        )
+
+
+def test_filelist_rejects_parent_escape(tmp_path: Path) -> None:
+    workspace, _ = _write_outside(tmp_path)
+    filelist = workspace / "files.f"
+    filelist.write_text("../outside.v\n", encoding="utf-8")
+
+    with pytest.raises(PathNotAllowed):
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="verilog"),
+            project=None,
+            paths=PathPolicy.create(workspace),
+        )
+
+
+def test_filelist_rejects_symlink_escape(tmp_path: Path) -> None:
+    workspace, outside = _write_outside(tmp_path)
+    (workspace / "link.v").symlink_to(outside)
+    filelist = workspace / "files.f"
+    filelist.write_text("link.v\n", encoding="utf-8")
+
+    with pytest.raises(PathNotAllowed):
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="verilog"),
+            project=None,
+            paths=PathPolicy.create(workspace),
+        )
+
+
+def test_filelist_rejects_nested_outside_filelist(tmp_path: Path) -> None:
+    workspace, outside = _write_outside(tmp_path)
+    escape = tmp_path / "escape.f"
+    escape.write_text(f"{outside}\n", encoding="utf-8")
+    filelist = workspace / "files.f"
+    filelist.write_text("-f ../escape.f\n", encoding="utf-8")
+
+    with pytest.raises(PathNotAllowed):
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="verilog"),
+            project=None,
+            paths=PathPolicy.create(workspace),
+        )
+
+
+def test_filelist_rejects_outside_include_dir(tmp_path: Path) -> None:
+    workspace, _ = _write_outside(tmp_path)
+    filelist = workspace / "files.f"
+    filelist.write_text("+incdir+/tmp/outside-include\n", encoding="utf-8")
+
+    with pytest.raises(PathNotAllowed):
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="verilog"),
+            project=None,
+            paths=PathPolicy.create(workspace),
+        )
+
+
+def test_recursive_filelist_is_rejected(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.v").write_text("module a; endmodule\n", encoding="utf-8")
+    filelist = workspace / "files.f"
+    filelist.write_text("-f files.f\n", encoding="utf-8")
+
+    with pytest.raises(InvalidInput):
+        resolve_sources(
+            SourceSet(filelist=str(filelist), language="verilog"),
+            project=None,
+            paths=PathPolicy.create(workspace),
+        )
+
+
+def test_testbench_instantiation_does_not_hide_the_dut(tmp_path: Path) -> None:
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "tb").mkdir()
+    (tmp_path / "rtl" / "leaf.v").write_text(
+        "module leaf(input a, output b); assign b = a; endmodule\n", encoding="utf-8"
+    )
+    (tmp_path / "rtl" / "top.v").write_text(
+        "module top(input a, output b); leaf u_leaf(.a(a), .b(b)); endmodule\n", encoding="utf-8"
+    )
+    (tmp_path / "tb" / "tb_top.v").write_text(
+        "module tb_top; reg a; wire b; top uut(.a(a), .b(b)); endmodule\n", encoding="utf-8"
+    )
+
+    profile = inspect_project(tmp_path, paths=PathPolicy.create(tmp_path))
+
+    assert profile.top_candidates[0] == "top"
+    assert "leaf" not in profile.top_candidates
+    assert profile.testbenches == ["tb_top"]

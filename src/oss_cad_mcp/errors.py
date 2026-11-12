@@ -52,6 +52,14 @@ class PreflightFailed(CadError):
     code = "preflight_failed"
 
 
+class UnsupportedTarget(CadError):
+    code = "unsupported_target"
+
+
+class BinaryArtifact(CadError):
+    code = "binary_artifact"
+
+
 class ToolFailed(CadError):
     code = "tool_failed"
 

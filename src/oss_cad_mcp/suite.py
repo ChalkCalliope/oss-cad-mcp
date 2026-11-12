@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 from collections.abc import Iterable
@@ -36,6 +37,31 @@ _HARDWARE_TOOLS = {
     "lsftdi",
     "lsusb",
 }
+_VERSION_RE = re.compile(r"\b\d+\.\d+(?:[.\-+~][0-9A-Za-z.]+)?\b")
+_BAD_VERSION_PREFIXES = (
+    "usage:",
+    "warning",
+    "error",
+    "unknown option",
+    "traceback",
+    "name ",
+    "name:",
+    "command line",
+)
+
+
+def _valid_version_line(text: str) -> str | None:
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.lower().startswith(_BAD_VERSION_PREFIXES):
+            continue
+        if _VERSION_RE.search(line):
+            return line[:300]
+    return None
+
+
 _INTERNAL_TOOLS = {
     "bwrap",
     "find_libpython",
@@ -256,9 +282,11 @@ class Suite:
             return None
         for args in (version_args, ("-V",), ("-v",), ("version",)):
             code, text = self.run_text(name, list(args), timeout=5.0)
-            lines = [line.strip() for line in text.splitlines() if line.strip()]
-            if lines and (code == 0 or lines):
-                return lines[0][:300]
+            if code != 0:
+                continue
+            line = _valid_version_line(text)
+            if line:
+                return line
         return None
 
     def tool_help(self, name: str, help_args: tuple[str, ...] = ("--help", "-h", "help")) -> str:

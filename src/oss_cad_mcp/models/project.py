@@ -43,6 +43,8 @@ class FormalConfig(BaseModel):
     engine: str = "smtbmc"
     depth: int = Field(default=20, ge=1, le=10000)
     mode: Literal["prove", "bmc", "cover"] = "prove"
+    top: str | None = None
+    sources: list[str] = Field(default_factory=list)
 
 
 class ProjectConfig(BaseModel):
@@ -77,6 +79,8 @@ class ProjectProfile(BaseModel):
     languages: list[str] = Field(default_factory=list)
     top_candidates: list[str] = Field(default_factory=list)
     testbenches: list[str] = Field(default_factory=list)
+    testbench_units: dict[str, str] = Field(default_factory=dict)
+    formal_units: list[str] = Field(default_factory=list)
     modules: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     constraints: list[ConstraintFile] = Field(default_factory=list)

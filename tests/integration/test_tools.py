@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -85,8 +86,8 @@ end architecture sim;
     config_path = root / "oss-cad-project.toml"
     config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     assert config["project"]["top"] == "pwm"
-    assert config["project"]["sources"] == ["vhdl_init/rtl/pwm.vhd"]
-    assert config["project"]["testbenches"] == ["vhdl_init/tb/tb_pwm.vhd"]
+    assert config["project"]["sources"] == ["rtl/pwm.vhd"]
+    assert config["project"]["testbenches"] == ["tb/tb_pwm.vhd"]
     assert config["sim"]["testbench"] == "tb_pwm"
 
     validated = await cad_project(ctx, ProjectRequest(action="validate", root="vhdl_init"))
@@ -95,6 +96,7 @@ end architecture sim;
 
 @pytest.mark.integration
 async def test_raw_tool_run_and_job_log(app: AppContext) -> None:
+    app.settings.allow_raw = True
     ctx = make_ctx(app)
     result = await cad_tool_run(ctx, ToolRunRequest(tool="yosys", args=["-V"]))
     assert result.ok
@@ -110,6 +112,7 @@ async def test_raw_tool_run_and_job_log(app: AppContext) -> None:
 
 @pytest.mark.integration
 async def test_hardware_is_blocked(app: AppContext) -> None:
+    app.settings.allow_raw = True
     ctx = make_ctx(app)
     result = await cad_tool_run(ctx, ToolRunRequest(tool="openFPGALoader", args=["--detect"]))
     assert result.ok is False
@@ -312,3 +315,123 @@ def test_netlist_hides_blackbox_library_modules(app: AppContext) -> None:
 
     library = inspect_netlist(app, action="stats", path="library-netlist.json", include_library=True)
     assert library.module_count == 2
+
+
+def _no_suite_app(tmp_path):
+    from oss_cad_mcp.app import build_app
+    from oss_cad_mcp.config import Settings
+
+    app = build_app(Settings(workspace=tmp_path))
+    app.suite = None
+    app.registry = None
+    app.suite_error = "simulated missing suite"
+    return app
+
+
+async def test_no_suite_discovery_tools_return_structured_errors(tmp_path) -> None:
+    app = _no_suite_app(tmp_path)
+    ctx = make_ctx(app)
+    try:
+        search = await cad_tool_search(ctx, ToolSearchRequest())
+        assert search.ok is False
+        assert search.error is not None
+        assert search.error.code == "suite_not_found"
+
+        help_result = await cad_tool_help(ctx, ToolHelpRequest(tool="yosys"))
+        assert help_result.ok is False
+        assert help_result.error is not None
+        assert help_result.error.code == "suite_not_found"
+
+        app.settings.allow_raw = True
+        run = await cad_tool_run(ctx, ToolRunRequest(tool="yosys", args=["-V"]))
+        assert run.ok is False
+        assert run.error is not None
+        assert run.error.code == "suite_not_found"
+    finally:
+        await app.jobs.shutdown()
+
+
+def test_cli_no_suite_has_no_traceback(tmp_path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PATH": "/usr/bin:/bin",
+        "OSS_CAD_SUITE_ROOT": "/nonexistent-suite",
+        "PYTHONPATH": str(repo / "src"),
+    }
+    for args in (["catalog", "yosys"], ["tool-help", "yosys"]):
+        proc = subprocess.run(
+            [sys.executable, "-m", "oss_cad_mcp", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=repo,
+            timeout=60,
+        )
+        assert proc.returncode == 1
+        assert "Traceback" not in proc.stderr
+        assert "suite" in proc.stderr.lower()
+
+
+@pytest.mark.integration
+async def test_project_init_reopens_with_root_workspace(app: AppContext) -> None:
+    from oss_cad_mcp.app import build_app
+    from oss_cad_mcp.config import Settings
+
+    root = app.workspace / "reopen"
+    (root / "rtl").mkdir(parents=True)
+    (root / "tb").mkdir()
+    (root / "rtl" / "counter.v").write_text(
+        "module counter(input clk, output reg q); always @(posedge clk) q <= ~q; endmodule\n",
+        encoding="utf-8",
+    )
+    (root / "tb" / "tb_counter.v").write_text(
+        "module tb_counter; reg clk; wire q; counter uut(.clk(clk), .q(q)); endmodule\n",
+        encoding="utf-8",
+    )
+
+    ctx = make_ctx(app)
+    init = await cad_project(ctx, ProjectRequest(action="init", root="reopen", write=True))
+    assert init.ok
+    config = tomllib.loads((root / "oss-cad-project.toml").read_text(encoding="utf-8"))
+    assert config["project"]["sources"] == ["rtl/counter.v"]
+    assert config["project"]["testbenches"] == ["tb/tb_counter.v"]
+
+    reopened = build_app(Settings(workspace=root))
+    try:
+        reopened_ctx = make_ctx(reopened)
+        validated = await cad_project(reopened_ctx, ProjectRequest(action="validate"))
+        assert validated.ok
+    finally:
+        await reopened.jobs.shutdown()
+
+
+@pytest.mark.integration
+async def test_binary_read_text_is_rejected(app: AppContext) -> None:
+    ctx = make_ctx(app)
+    (app.workspace / "blob.bin").write_bytes(b"\x00\x01\x02\xfe\xffbinary")
+    result = await cad_artifact(ctx, ArtifactRequest(action="read_text", path="blob.bin"))
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "binary_artifact"
+    assert result.total_bytes == 11
+    assert result.value
+
+    stat = await cad_artifact(ctx, ArtifactRequest(action="stat", path="blob.bin"))
+    assert stat.ok is True
+
+
+@pytest.mark.integration
+async def test_raw_execution_disabled_by_default(app: AppContext) -> None:
+    ctx = make_ctx(app)
+    result = await cad_tool_run(ctx, ToolRunRequest(tool="yosys", args=["-V"]))
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "raw_disabled"

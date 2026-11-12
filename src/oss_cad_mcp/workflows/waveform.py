@@ -15,7 +15,7 @@ from oss_cad_mcp.models.results import (
     WaveformInfo,
     WaveformReport,
 )
-from oss_cad_mcp.parsers.vcd import parse_header, scan
+from oss_cad_mcp.parsers.vcd import parse_header, scan, validate_vcd
 from oss_cad_mcp.workflows.common import output_path, run_tool, work_path
 
 WaveAction = Literal["info", "signals", "sample", "summarize", "export", "convert"]
@@ -68,7 +68,7 @@ def _timescale_seconds(value: str) -> float:
 
 
 def _signal_infos(header, signals: list[str] | None, max_signals: int) -> tuple[list[SignalInfo], bool]:
-    selected = []
+    matched = []
     for var in header.vars:
         if signals and not any(
             var.name == pattern
@@ -78,10 +78,11 @@ def _signal_infos(header, signals: list[str] | None, max_signals: int) -> tuple[
             for pattern in signals
         ):
             continue
-        selected.append(SignalInfo(name=var.path, width=var.width, kind=var.kind, scope=var.scope))
-        if len(selected) >= max_signals:
-            return selected, True
-    return selected, False
+        matched.append(var)
+    selected = [
+        SignalInfo(name=var.path, width=var.width, kind=var.kind, scope=var.scope) for var in matched[:max_signals]
+    ]
+    return selected, len(matched) > max_signals
 
 
 async def _ensure_vcd(app: AppContext, job, path: Path) -> Path:
@@ -141,6 +142,7 @@ async def run_waveform(
     end: str | int | float | None = None,
     max_samples: int = 1_000,
     max_signals: int = 64,
+    allow_empty: bool = False,
     output_format: Literal["vcd", "fst"] | None = None,
 ) -> WaveformReport:
     source = app.paths.resolve_read(path, must_exist=True)
@@ -177,6 +179,7 @@ async def run_waveform(
 
     vcd_path = await _ensure_vcd(app, job, source)
     header = parse_header(vcd_path)
+    validate_vcd(vcd_path, header, allow_empty=allow_empty)
     start_tick = _parse_time(start, header.timescale)
     end_tick = _parse_time(end, header.timescale) if end is not None else None
     if end_tick is not None and end_tick < start_tick:
@@ -201,7 +204,7 @@ async def run_waveform(
             max_time=scan_result.max_time,
             scopes=header.scopes,
             signals=selected,
-            signals_truncated=truncated or len(header.vars) > len(selected),
+            signals_truncated=truncated,
         )
         if action == "signals":
             summary = (
@@ -266,6 +269,7 @@ async def run_waveform(
             ok=True,
             action=action,
             samples=scan_result.samples,
+            samples_truncated=scan_result.truncated,
             artifact=artifact,
             job=job.to_ref(),
             artifacts=[artifact],

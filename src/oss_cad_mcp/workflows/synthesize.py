@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import shlex
-from pathlib import Path
 from typing import Literal
 
 from oss_cad_mcp.app import AppContext
-from oss_cad_mcp.errors import InvalidInput, PreflightFailed
+from oss_cad_mcp.errors import CadError, InvalidInput, PreflightFailed, UnsupportedTarget
 from oss_cad_mcp.models.common import ErrorInfo, SourceSet
 from oss_cad_mcp.models.results import SynthesisReport
 from oss_cad_mcp.parsers import yosys as yosys_parser
@@ -16,8 +15,8 @@ from oss_cad_mcp.workflows.common import (
     define_args,
     include_args,
     output_path,
-    read_tail,
     run_tool,
+    step_text,
     work_path,
 )
 
@@ -62,7 +61,7 @@ async def run_synthesize(
     *,
     source: SourceSet | None = None,
     top: str | None = None,
-    target: SynthTarget = "generic",
+    target: SynthTarget | None = None,
     flatten: bool = False,
     abc9: bool = False,
     timeout_s: float = 300.0,
@@ -71,12 +70,16 @@ async def run_synthesize(
     project, _ = load_project_config(app.workspace)
     try:
         resolved = resolve_sources(source, project=project, paths=app.paths)
+    except CadError:
+        raise
     except Exception as exc:
         raise InvalidInput(str(exc), hint="Check source globs and project configuration.") from exc
     if not resolved.files:
         raise InvalidInput("No HDL source files were found for synthesis.")
     top = _resolve_top(app, project, source, top)
-    target = target or (project.target.family if project and project.target.family else "generic")  # type: ignore[assignment]
+    resolved_target: SynthTarget = target or (project.target.family if project and project.target.family else "generic")  # type: ignore[assignment]
+    if resolved_target not in _SYNTH_COMMANDS:
+        raise InvalidInput(f"Unsupported synthesis target: {resolved_target}")
     netlist = output_path(app, job, "synth", f"{top or 'design'}.json")
     stat_path = output_path(app, job, "synth", f"{top or 'design'}.stat.json")
     script_path = work_path(job, "synth.ys")
@@ -120,9 +123,16 @@ async def run_synthesize(
             ]
             commands.append(" ".join(item for item in read_args if item))
 
-    synth_command = _SYNTH_COMMANDS.get(target)
+    synth_command = _SYNTH_COMMANDS.get(resolved_target)
     if synth_command is None:
-        raise InvalidInput(f"Unsupported synthesis target: {target}")
+        raise InvalidInput(f"Unsupported synthesis target: {resolved_target}")
+    if not app.supports_synth_command(synth_command):
+        supported = [name for name, command in _SYNTH_COMMANDS.items() if app.supports_synth_command(command)]
+        raise UnsupportedTarget(
+            f"Yosys does not support {synth_command} in this suite (target {resolved_target}).",
+            hint=f"Supported targets: {', '.join(supported) or 'none detected'}",
+            details={"target": resolved_target, "command": synth_command, "supported": supported},
+        )
     synth_args = [synth_command]
     if top:
         synth_args.extend(["-top", top])
@@ -130,9 +140,9 @@ async def run_synthesize(
         synth_args.append("-auto-top")
     if flatten:
         synth_args.append("-flatten")
-    if abc9 and target in {"ice40", "ecp5"}:
+    if abc9 and resolved_target in {"ice40", "ecp5"}:
         synth_args.append("-abc9")
-    if target == "generic":
+    if resolved_target == "generic":
         # The generic "synth" command does not accept -json. Run synthesis
         # first and emit the netlist with the dedicated backend.
         commands.append(" ".join(synth_args))
@@ -153,7 +163,7 @@ async def run_synthesize(
         timeout_s=timeout_s,
         step_name="synth",
     )
-    log_text = _step_log(job, "synth")
+    log_text = step_text(job, "synth")
     warnings = [
         diagnostic.message for diagnostic in yosys_parser.parse_log(log_text) if diagnostic.severity == "warning"
     ]
@@ -177,14 +187,14 @@ async def run_synthesize(
             hint="Inspect the synthesis job log and the Yosys diagnostics.",
         )
     summary = (
-        f"Synthesized {top or 'design'} for {target}: "
+        f"Synthesized {top or 'design'} for {resolved_target}: "
         f"{summary_stats.get('num_cells', 0)} cells, {summary_stats.get('num_wires', 0)} wires"
         if ok
         else "Synthesis failed."
     )
     return SynthesisReport(
         ok=ok,
-        target=target,
+        target=resolved_target,
         top=top,
         cells_by_type=summary_stats.get("cells_by_type", {}),
         stats=summary_stats,
@@ -195,10 +205,3 @@ async def run_synthesize(
         error=error,
         summary=summary,
     )
-
-
-def _step_log(job, name: str) -> str:
-    for step in reversed(job.steps):
-        if step.name == name and step.stdout:
-            return read_tail(Path(step.stdout), max_bytes=4_000_000)
-    return ""
