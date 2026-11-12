@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from oss_cad_mcp.errors import InvalidInput
 from oss_cad_mcp.parsers import icetime, iverilog, sby, slang, verilator, yosys
-from oss_cad_mcp.parsers.vcd import parse_header, scan
+from oss_cad_mcp.parsers.vcd import parse_header, scan, validate_vcd
 
 
 def test_slang_diagnostics(tmp_path: Path) -> None:
@@ -186,3 +189,54 @@ b0001 "
     result = scan(path, signals=["tb.cnt"], max_samples=10)
     assert result.samples[-1].values["tb.cnt"] == "0001"
     assert result.stats["tb.cnt"]["transitions"] == 2
+
+
+def test_slang_hierarchy_structured_output() -> None:
+    text = "\n".join(
+        [
+            'Module="stream_top" Instance="stream_top" File="rtl/stream_top.sv" Parameters: DEPTH=32\'d8, WIDTH=32\'d32',
+            'Module="axi_lite_regs" Instance="stream_top.u_regs" File="rtl/axi_lite_regs.sv"',
+            'Module="stream_fifo" Instance="stream_top.u_fifo" File="rtl/stream_fifo.sv" Parameters: DEPTH=32\'d8, PTR_W=32\'d3',
+            'Module="stream_fifo" Instance="stream_top.u_fifo.u_inner" File="rtl/stream_fifo.sv"',
+            "rtl/top.sv:5:2: error: something failed",
+            "",
+            "Top level design units:",
+            "    stream_top",
+        ]
+    )
+    roots = slang.parse_hierarchy(text)
+    assert len(roots) == 1
+    root = roots[0]
+    assert root.name == "stream_top"
+    assert root.module == "stream_top"
+    assert root.parameters == {"DEPTH": "32'd8", "WIDTH": "32'd32"}
+    assert [child.name for child in root.children] == ["u_regs", "u_fifo"]
+    fifo = root.children[1]
+    assert fifo.module == "stream_fifo"
+    assert fifo.parameters == {"DEPTH": "32'd8", "PTR_W": "32'd3"}
+    assert [child.name for child in fifo.children] == ["u_inner"]
+
+
+def test_vcd_validation_rejects_non_vcd(tmp_path: Path) -> None:
+    path = tmp_path / "bad.vcd"
+    path.write_text("not a vcd\n", encoding="utf-8")
+    header = parse_header(path)
+    with pytest.raises(InvalidInput):
+        validate_vcd(path, header)
+
+
+def test_vcd_validation_rejects_empty_file(tmp_path: Path) -> None:
+    path = tmp_path / "empty.vcd"
+    path.write_text("", encoding="utf-8")
+    header = parse_header(path)
+    with pytest.raises(InvalidInput):
+        validate_vcd(path, header)
+
+
+def test_vcd_validation_rejects_zero_signal_dump_by_default(tmp_path: Path) -> None:
+    path = tmp_path / "empty-valid.vcd"
+    path.write_text("$timescale 1ns $end\n$enddefinitions $end\n", encoding="utf-8")
+    header = parse_header(path)
+    with pytest.raises(InvalidInput):
+        validate_vcd(path, header)
+    validate_vcd(path, header, allow_empty=True)

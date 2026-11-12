@@ -49,7 +49,7 @@ def _clean_name(name: str) -> str:
     return name[1:] if name.startswith("\\") else name
 
 
-def _cell_counts(modules: dict[str, Any]) -> dict[str, int]:
+def _cell_counts(modules: dict[str, Any], *, include_internal: bool = False) -> dict[str, int]:
     counts: Counter[str] = Counter()
     for module in modules.values():
         if not isinstance(module, dict):
@@ -57,8 +57,12 @@ def _cell_counts(modules: dict[str, Any]) -> dict[str, int]:
         cells = module.get("cells", {})
         if isinstance(cells, dict):
             for cell in cells.values():
-                if isinstance(cell, dict) and cell.get("type"):
-                    counts[str(cell["type"])] += 1
+                if not isinstance(cell, dict) or not cell.get("type"):
+                    continue
+                cell_type = str(cell["type"])
+                if not include_internal and cell_type == "$scopeinfo":
+                    continue
+                counts[cell_type] += 1
     return dict(sorted(counts.items()))
 
 
@@ -145,55 +149,71 @@ def _matches_nets(
     return matches
 
 
-def _fanout(modules: dict[str, Any], net_filter: str, limit: int) -> list[NetlistMatch]:
-    matches: list[NetlistMatch] = []
-    for module_name, module in modules.items():
+def _fanout(modules: dict[str, Any], net_filter: str, limit: int) -> tuple[list[NetlistMatch], bool, int]:
+    matched: list[tuple[str, str, dict[str, Any]]] = []
+    for module_name in sorted(modules):
+        module = modules[module_name]
         if not isinstance(module, dict):
             continue
         netnames = module.get("netnames", {})
         if not isinstance(netnames, dict):
             continue
-        selected_bits: set[int] = set()
-        selected_names: list[str] = []
-        for net_name, net in netnames.items():
+        for net_name in sorted(netnames):
+            net = netnames[net_name]
             if net_filter.lower() not in str(net_name).lower():
                 continue
-            selected_names.append(_clean_name(str(net_name)))
-            if isinstance(net, dict):
-                for bit in net.get("bits", []) or []:
-                    if isinstance(bit, int):
-                        selected_bits.add(bit)
-        if not selected_names:
-            continue
+            matched.append((module_name, str(net_name), net if isinstance(net, dict) else {}))
+
+    total_matches = len(matched)
+    matches: list[NetlistMatch] = []
+    truncated = total_matches > limit
+    for module_name, net_name, net in matched[:limit]:
+        module = modules[module_name]
+        selected_bits = {bit for bit in net.get("bits", []) or [] if isinstance(bit, int)}
         loads: list[NetlistMatch] = []
+        total_loads = 0
         cells = module.get("cells", {})
         if isinstance(cells, dict):
-            for cell_name, cell in cells.items():
+            for cell_name in sorted(cells):
+                cell = cells[cell_name]
                 if not isinstance(cell, dict):
                     continue
-                for port, value in (cell.get("connections", {}) or {}).items():
+                directions = cell.get("port_directions", {})
+                if not isinstance(directions, dict):
+                    directions = {}
+                for port, value in sorted((cell.get("connections", {}) or {}).items()):
+                    if directions.get(str(port)) not in {"input", "inout"}:
+                        continue
                     values = value if isinstance(value, list) else [value]
-                    if any(isinstance(bit, int) and bit in selected_bits for bit in values):
+                    if not any(isinstance(bit, int) and bit in selected_bits for bit in values):
+                        continue
+                    total_loads += 1
+                    if len(loads) < limit:
                         loads.append(
                             NetlistMatch(
-                                module=_clean_name(str(module_name)),
+                                module=_clean_name(module_name),
                                 name=_clean_name(str(cell_name)),
                                 type=str(cell.get("type", "")) or None,
                                 details={"port": str(port)},
                             )
                         )
-                        if len(loads) >= limit:
-                            break
+        load_truncated = total_loads > len(loads)
+        if load_truncated:
+            truncated = True
         matches.append(
             NetlistMatch(
-                module=_clean_name(str(module_name)),
-                name=", ".join(selected_names) or net_filter,
-                details={"bits": sorted(selected_bits), "loads": [load.model_dump() for load in loads]},
+                module=_clean_name(module_name),
+                name=_clean_name(net_name),
+                details={
+                    "net": _clean_name(net_name),
+                    "bits": sorted(selected_bits),
+                    "loads": [load.model_dump() for load in loads],
+                    "total_loads": total_loads,
+                    "truncated": load_truncated,
+                },
             )
         )
-        if len(matches) >= limit:
-            break
-    return matches
+    return matches, truncated, total_matches
 
 
 def inspect_netlist(
@@ -212,7 +232,7 @@ def inspect_netlist(
     resolved = app.paths.resolve_read(path, must_exist=True)
     data = _load(resolved)
     modules = _modules(data, include_internal=include_internal, include_library=include_library)
-    counts = _cell_counts(modules)
+    counts = _cell_counts(modules, include_internal=include_internal)
     base = NetlistReport(
         ok=True,
         action=action,
@@ -237,8 +257,9 @@ def inspect_netlist(
     if action == "fanout":
         if not name:
             raise InvalidInput("fanout requires name (a net-name substring).")
-        base.matches = _fanout(modules, name, limit)
-        base.summary = f"Found {len(base.matches)} net group(s) and their loads."
+        base.matches, base.truncated, base.total_matches = _fanout(modules, name, limit)
+        suffix = " (truncated)" if base.truncated else ""
+        base.summary = f"Found {len(base.matches)} net(s) and their loads{suffix}."
         return base
     if action == "diff":
         if not other:
@@ -246,7 +267,7 @@ def inspect_netlist(
         other_path = app.paths.resolve_read(other, must_exist=True)
         other_data = _load(other_path)
         other_modules = _modules(other_data, include_internal=include_internal, include_library=include_library)
-        other_counts = _cell_counts(other_modules)
+        other_counts = _cell_counts(other_modules, include_internal=include_internal)
         added = {key: value for key, value in counts.items() if key not in other_counts}
         removed = {key: value for key, value in other_counts.items() if key not in counts}
         changed = {

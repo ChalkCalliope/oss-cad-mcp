@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from oss_cad_mcp.app import AppContext
-from oss_cad_mcp.errors import InvalidInput
+from oss_cad_mcp.errors import CadError, InvalidInput
 from oss_cad_mcp.models.common import SourceSet
 from oss_cad_mcp.models.diagnostics import CheckReport, Diagnostic, HierarchyNode
 from oss_cad_mcp.parsers import ghdl as ghdl_parser
@@ -19,9 +19,10 @@ from oss_cad_mcp.workflows.common import (
     define_args,
     include_args,
     merge_diagnostics,
-    read_tail,
     run_tool,
     source_files,
+    step_stdout,
+    step_text,
     work_path,
 )
 
@@ -62,6 +63,8 @@ async def run_check(
     project, _ = load_project_config(app.workspace)
     try:
         resolved = resolve_sources(source, project=project, paths=app.paths)
+    except CadError:
+        raise
     except Exception as exc:
         raise InvalidInput(str(exc), hint="Check source globs and project configuration.") from exc
     if not resolved.files:
@@ -132,7 +135,7 @@ async def run_check(
                     timeout_s=timeout_s,
                     step_name="slang-hier",
                 )
-                hierarchy = slang_parser.parse_hierarchy(result_tail(app, job, "slang-hier"))
+                hierarchy = slang_parser.parse_hierarchy(step_stdout(job, "slang-hier"))
                 if hier.exit_code not in (0, None):
                     warnings.append("slang-hier exited nonzero; hierarchy may be incomplete.")
             engine_names.append("slang")
@@ -166,9 +169,7 @@ async def run_check(
                     app.artifacts.register(job, sarif_path, kind="report", description="Verilator SARIF diagnostics")
                 )
             if not sarif_path.exists():
-                all_diagnostics.extend(
-                    verilator_parser.parse_text(result_tail(app, job, "verilator"), base=app.workspace)
-                )
+                all_diagnostics.extend(verilator_parser.parse_text(step_text(job, "verilator"), base=app.workspace))
             engine_names.append("verilator")
             if result.timed_out:
                 warnings.append("Verilator timed out.")
@@ -187,9 +188,7 @@ async def run_check(
             result = await run_tool(
                 app, job, name="iverilog", args=args, cwd=app.workspace, timeout_s=timeout_s, step_name="iverilog"
             )
-            all_diagnostics.extend(
-                iverilog_parser.parse_iverilog(result_tail(app, job, "iverilog"), base=app.workspace)
-            )
+            all_diagnostics.extend(iverilog_parser.parse_iverilog(step_text(job, "iverilog"), base=app.workspace))
             engine_names.append("iverilog")
             if result.timed_out:
                 warnings.append("Icarus Verilog timed out.")
@@ -201,7 +200,7 @@ async def run_check(
             result = await run_tool(
                 app, job, name="ghdl", args=args, cwd=app.workspace, timeout_s=timeout_s, step_name="ghdl"
             )
-            all_diagnostics.extend(ghdl_parser.parse_ghdl(result_tail(app, job, "ghdl"), base=app.workspace))
+            all_diagnostics.extend(ghdl_parser.parse_ghdl(step_text(job, "ghdl"), base=app.workspace))
             engine_names.append("ghdl")
             if result.timed_out:
                 warnings.append("GHDL timed out.")
@@ -228,16 +227,3 @@ async def run_check(
         warnings=warnings,
         summary=summary,
     )
-
-
-def result_tail(app: AppContext, job, step_name: str) -> str:
-    for step in reversed(job.steps):
-        if step.name == step_name:
-            parts = []
-            if step.stdout:
-                parts.append(read_tail(Path(step.stdout), max_bytes=2_000_000))
-            if step.stderr:
-                parts.append(read_tail(Path(step.stderr), max_bytes=2_000_000))
-            if parts:
-                return "\n".join(parts)
-    return ""

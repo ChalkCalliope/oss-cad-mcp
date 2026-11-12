@@ -52,18 +52,21 @@ class SimulateRequest(BaseRequest):
 class SynthesizeRequest(BaseRequest):
     source: SourceSet = Field(default_factory=SourceSet)
     top: str | None = None
-    target: Literal["generic", "ice40", "ecp5", "gowin", "nexus", "machxo2", "gatemate"] = "generic"
+    target: Literal["generic", "ice40", "ecp5", "gowin", "nexus", "machxo2", "gatemate"] | None = Field(
+        default=None,
+        description="Synthesis target; defaults to [target].family from oss-cad-project.toml, then generic.",
+    )
     flatten: bool = False
     abc9: bool = False
     timeout_s: float = Field(default=300.0, gt=0, le=3600)
 
 
 class VerifyRequest(BaseRequest):
-    mode: Literal["prove", "bmc", "cover", "equiv", "mutation"] = "prove"
+    mode: Literal["prove", "bmc", "cover", "equiv", "mutation"] | None = None
     source: SourceSet = Field(default_factory=SourceSet)
     top: str | None = None
-    engine: str = "smtbmc"
-    depth: int = Field(default=20, ge=1, le=10000)
+    engine: str | None = None
+    depth: int | None = Field(default=None, ge=1, le=10000)
     config_file: str | None = None
     timeout_s: float = Field(default=600.0, gt=0, le=86_400)
     expect_fail: bool = False
@@ -82,6 +85,10 @@ class FpgaBuildRequest(BaseRequest):
         default=False,
         description="Allow an early bring-up build with unconstrained I/O.",
     )
+    allow_timing_fail: bool = Field(
+        default=False,
+        description="Continue through packing when place-and-route reports a timing failure.",
+    )
     frequency_mhz: float | None = Field(default=None, gt=0)
     seed: int | None = None
     placer: str | None = None
@@ -97,6 +104,7 @@ class WaveformRequest(BaseRequest):
     end: str | int | float | None = None
     max_samples: int = Field(default=1_000, ge=1, le=100_000)
     max_signals: int = Field(default=64, ge=1, le=1_024)
+    allow_empty: bool = Field(default=False, description="Allow a structurally valid VCD with no signals.")
     output_format: Literal["vcd", "fst"] | None = None
     timeout_s: float = Field(default=180.0, gt=0, le=3600)
 
@@ -166,4 +174,3 @@ class ToolRunRequest(BaseRequest):
     timeout_s: float = Field(default=300.0, gt=0, le=86_400)
     stdin: str | None = None
     allow_unsafe: bool = False
-    confirm: bool = False

@@ -8,14 +8,14 @@ from pathlib import Path
 from typing import Literal
 
 from oss_cad_mcp.app import AppContext
-from oss_cad_mcp.errors import InvalidInput, PreflightFailed
+from oss_cad_mcp.errors import CadError, InvalidInput, PreflightFailed
 from oss_cad_mcp.models.common import ErrorInfo, SourceSet
 from oss_cad_mcp.models.diagnostics import Diagnostic
 from oss_cad_mcp.models.results import SimulationReport
 from oss_cad_mcp.parsers import ghdl as ghdl_parser
 from oss_cad_mcp.parsers import iverilog as iverilog_parser
 from oss_cad_mcp.parsers import verilator as verilator_parser
-from oss_cad_mcp.project import inspect_project, load_project_config, resolve_sources
+from oss_cad_mcp.project import inspect_project, load_project_config, resolve_sources, unit_instantiates
 from oss_cad_mcp.workflows.common import (
     define_args,
     include_args,
@@ -23,6 +23,7 @@ from oss_cad_mcp.workflows.common import (
     read_tail,
     run_tool,
     source_files,
+    step_text,
     work_path,
 )
 
@@ -45,7 +46,25 @@ def _resolve_top(app: AppContext, project, source: SourceSet | None, top: str | 
         return project.sim.testbench
     profile = inspect_project(app.workspace, paths=app.paths)
     if profile.testbenches:
-        return profile.testbenches[0]
+        candidate_top = profile.top_candidates[0] if profile.top_candidates else None
+        if candidate_top:
+            matching = [
+                name
+                for name in profile.testbenches
+                if name in profile.testbench_units
+                and unit_instantiates(app.paths.resolve_read(profile.testbench_units[name]), candidate_top)
+            ]
+            if len(matching) == 1:
+                return matching[0]
+            for pattern in (f"tb_{candidate_top}", f"{candidate_top}_tb"):
+                if pattern in matching:
+                    return pattern
+        if len(profile.testbenches) == 1:
+            return profile.testbenches[0]
+        raise InvalidInput(
+            f"Multiple testbenches were detected: {', '.join(profile.testbenches)}",
+            hint="Pass top='tb_name' or set [sim].testbench in oss-cad-project.toml.",
+        )
     if profile.top_candidates:
         return profile.top_candidates[0]
     raise InvalidInput(
@@ -81,6 +100,8 @@ async def run_simulate(
     project, _ = load_project_config(app.workspace)
     try:
         resolved = resolve_sources(source, project=project, paths=app.paths, include_testbenches=True)
+    except CadError:
+        raise
     except Exception as exc:
         raise InvalidInput(str(exc), hint="Check source globs and project configuration.") from exc
     if not resolved.files:
@@ -172,12 +193,19 @@ async def run_simulate(
                 None,
                 "Verilator did not produce a simulation executable.",
             )
+        run_args = list(plusargs or [])
+        if seed is not None:
+            if any(arg.startswith("+seed=") for arg in run_args):
+                warnings.append("seed was ignored because plusargs already contains +seed=.")
+            else:
+                run_args.append(f"+seed={seed}")
+                run_args.append(f"+verilator+seed+{seed}")
         run_result = await run_tool(
             app,
             job,
             name="sim",
             executable=executable,
-            args=[*(plusargs or [])],
+            args=run_args,
             cwd=mdir,
             timeout_s=timeout_s,
             step_name="simulate",
@@ -219,7 +247,10 @@ async def run_simulate(
             )
         run_args = ["-n", str(vvp_path), *(plusargs or [])]
         if seed is not None:
-            run_args.append(f"+seed={seed}")
+            if any(arg.startswith("+seed=") for arg in run_args):
+                warnings.append("seed was ignored because plusargs already contains +seed=.")
+            else:
+                run_args.append(f"+seed={seed}")
         run_result = await run_tool(
             app, job, name="vvp", args=run_args, cwd=work_path(job, "."), timeout_s=timeout_s, step_name="simulate"
         )
@@ -231,8 +262,8 @@ async def run_simulate(
         analyze = await run_tool(
             app, job, name="ghdl", args=analyze_args, cwd=app.workspace, timeout_s=timeout_s, step_name="ghdl-analyze"
         )
-        text = read_tail(Path(job.steps[-1].stdout), max_bytes=2_000_000)
-        diagnostics.extend(ghdl_parser.parse_ghdl(text, base=app.workspace))
+        analyze_text = step_text(job, "ghdl-analyze")
+        diagnostics.extend(ghdl_parser.parse_ghdl(analyze_text, base=app.workspace))
         if analyze.exit_code not in (0, None):
             return _simulation_failure(
                 job, selected, top, diagnostics, warnings, analyze.exit_code, "GHDL analysis failed."
@@ -254,12 +285,17 @@ async def run_simulate(
             timeout_s=timeout_s,
             step_name="ghdl-elaborate",
         )
+        elaborate_text = step_text(job, "ghdl-elaborate")
+        if elaborate_text:
+            diagnostics.extend(ghdl_parser.parse_ghdl(elaborate_text, base=app.workspace))
         if elaborate.exit_code not in (0, None):
             return _simulation_failure(
                 job, selected, top, diagnostics, warnings, elaborate.exit_code, "GHDL elaboration failed."
             )
         wave = work_path(job, "wave.vcd")
         run_args = [f"--vcd={wave}", *(plusargs or [])]
+        if seed is not None:
+            warnings.append("seed is not supported by GHDL; use a testbench generic or engine-specific option.")
         run_result = await run_tool(
             app,
             job,
@@ -287,7 +323,7 @@ async def run_simulate(
     else:
         ok = not failed
     finish = _FINISH_RE.search(combined)
-    finish_reason = finish.group(0) if finish else ("timeout" if timed_out else None)
+    finish_reason = finish.group(0).strip() if finish else ("timeout" if timed_out else None)
     simulated_time = f"{finish.group(1)} {finish.group(2)}".strip() if finish else None
     if timed_out:
         _discard_waveforms(job)
@@ -389,13 +425,26 @@ def _discard_waveforms(job) -> None:
 
 
 def _simulation_failure(job, engine, top, diagnostics, warnings, exit_code, summary) -> SimulationReport:
+    stdout = _step_text(job, "simulate", "stdout")
+    stderr = _step_text(job, "simulate", "stderr")
+    if not stdout and not stderr and job.steps:
+        last = job.steps[-1]
+        stdout = read_tail(Path(last.stdout), max_bytes=2_000_000) if last.stdout else ""
+        stderr = read_tail(Path(last.stderr), max_bytes=2_000_000) if last.stderr else ""
     return SimulationReport(
         ok=False,
         engine=engine,
         top=top,
         exit_code=exit_code,
+        stdout_tail=stdout[-16_384:],
+        stderr_tail=stderr[-16_384:],
         diagnostics=merge_diagnostics(diagnostics),
         job=job.to_ref(),
         warnings=warnings,
+        error=ErrorInfo(
+            code="simulation_compile_failed",
+            message=summary,
+            hint="Inspect the compiler diagnostics and the job step log.",
+        ),
         summary=summary,
     )

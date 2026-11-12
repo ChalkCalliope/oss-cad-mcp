@@ -14,6 +14,10 @@ def test_settings_paths(tmp_path: Path) -> None:
     assert settings.runs_path == (tmp_path / ".oss-cad-mcp" / "runs").resolve()
 
 
+def test_raw_execution_is_opt_in() -> None:
+    assert Settings().allow_raw is False
+
+
 def test_toml_and_cli_precedence(tmp_path: Path, monkeypatch) -> None:
     config = tmp_path / "config.toml"
     config.write_text(f'workspace = "{tmp_path / "from-toml"}"\nprofile = "standard"\n')

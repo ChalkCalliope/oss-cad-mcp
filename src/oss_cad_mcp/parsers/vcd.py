@@ -35,6 +35,7 @@ class VcdHeader:
     timescale: str | None = None
     vars: list[VcdVar] = field(default_factory=list)
     scopes: list[str] = field(default_factory=list)
+    has_enddefinitions: bool = False
 
     @property
     def signal_count(self) -> int:
@@ -89,6 +90,7 @@ def parse_header(path: Path) -> VcdHeader:
                     continue
                 token = line.split(None, 1)[0]
                 if token == "$enddefinitions":
+                    header.has_enddefinitions = True
                     break
                 if token == "$comment":
                     pending_kind = "comment"
@@ -122,6 +124,28 @@ def parse_header(path: Path) -> VcdHeader:
         flush()
     header.scopes = sorted({var.scope for var in header.vars if var.scope})
     return header
+
+
+def validate_vcd(path: Path, header: VcdHeader, *, allow_empty: bool = False) -> None:
+    """Reject files that are not structurally VCD.
+
+    ``$enddefinitions`` is mandatory in a VCD; without it the file is plain
+    text or a truncated header. A structurally valid dump with no variables is
+    legal but usually a mistake, so it requires ``allow_empty=True``.
+    """
+
+    from oss_cad_mcp.errors import InvalidInput
+
+    if not header.has_enddefinitions:
+        raise InvalidInput(
+            f"{path.name} is not a valid VCD file (missing $enddefinitions).",
+            hint="Check the simulator trace output, or convert an FST/other dump to VCD first.",
+        )
+    if not header.vars and not allow_empty:
+        raise InvalidInput(
+            f"{path.name} contains no signal declarations.",
+            hint="Dump at least one signal, or set allow_empty=true to inspect the header only.",
+        )
 
 
 def _selected_vars(header: VcdHeader, signals: list[str] | None, max_signals: int) -> list[VcdVar]:

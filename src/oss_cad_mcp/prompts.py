@@ -49,8 +49,10 @@ Set up formal verification for `{top}` with clock `{clock}` and reset `{reset}`.
    source=SourceSet(files=[...]))`.
 3. If it fails, inspect the reported property and counterexample trace; use
    `cad_waveform` to find the first failing cycle.
-4. Distinguish an RTL bug from an over-strong assumption or a missing reset
-   constraint before editing the design.
+4. Distinguish an RTL bug from an over-strong assumption, a missing reset
+   constraint, or an unreachable `cover` (covers make the run fail too) before
+   editing the design. Project `[formal]` defaults apply when mode/depth/engine
+   are omitted.
 """
 
     @mcp.prompt(description="Build a software-only iCE40/ECP5 bitstream and inspect timing.")
@@ -63,8 +65,9 @@ Build a software-only FPGA image for the `{board}` board.
 2. Run `cad_fpga_build(board='{board}', constraints=['{constraints}'],
    source=SourceSet(files=[...]), top='...')`.
 3. If place-and-route fails, read the nextpnr log and check device/package/pin
-   constraints first.
-4. If timing fails, inspect `timing.critical_paths` and reduce the target
-   frequency or pipeline the critical path.
+   constraints first. Multiple constraint files are rejected; pass one PCF/LPF.
+4. A timing failure is reported as `timing_failed`; inspect `timing.critical_paths`
+   and reduce the target frequency or pipeline the critical path. Do not use a
+   bitstream from `allow_timing_fail=true` on hardware.
 5. Hardware programming is disabled in v0.1; stop after the bitstream artifact.
 """

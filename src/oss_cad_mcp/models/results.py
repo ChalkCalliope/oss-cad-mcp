@@ -167,6 +167,7 @@ class WaveformReport(BaseModel):
     action: str
     info: WaveformInfo | None = None
     samples: list[WaveformSample] = Field(default_factory=list)
+    samples_truncated: bool = False
     signal_stats: dict[str, dict[str, Any]] = Field(default_factory=dict)
     artifact: ArtifactInfo | None = None
     job: JobRef
@@ -199,6 +200,8 @@ class NetlistReport(BaseModel):
     cells_by_type: dict[str, int] = Field(default_factory=dict)
     stats: dict[str, Any] = Field(default_factory=dict)
     matches: list[NetlistMatch] = Field(default_factory=list)
+    truncated: bool = False
+    total_matches: int | None = None
     artifact: ArtifactInfo | None = None
     job: JobRef | None = None
     artifacts: list[ArtifactInfo] = Field(default_factory=list)

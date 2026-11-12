@@ -67,6 +67,36 @@ def read_tail(path: Path, *, max_bytes: int = 16_384) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def step_text(job, name: str, *, max_bytes: int = 2_000_000) -> str:
+    """Return the combined stdout and stderr for the last step with this name."""
+
+    for step in reversed(job.steps):
+        if step.name != name:
+            continue
+        parts: list[str] = []
+        if step.stdout:
+            parts.append(read_tail(Path(step.stdout), max_bytes=max_bytes))
+        if step.stderr:
+            parts.append(read_tail(Path(step.stderr), max_bytes=max_bytes))
+        return "\n".join(part for part in parts if part)
+    return ""
+
+
+def step_stream(job, name: str, stream: str, *, max_bytes: int = 2_000_000) -> str:
+    """Return one stream (stdout/stderr) for the last step with this name."""
+
+    for step in reversed(job.steps):
+        if step.name != name:
+            continue
+        path = getattr(step, stream, None)
+        return read_tail(Path(path), max_bytes=max_bytes) if path else ""
+    return ""
+
+
+def step_stdout(job, name: str, *, max_bytes: int = 2_000_000) -> str:
+    return step_stream(job, name, "stdout", max_bytes=max_bytes)
+
+
 async def run_tool(
     app: AppContext,
     job,

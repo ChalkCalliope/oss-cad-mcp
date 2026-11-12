@@ -389,3 +389,350 @@ async def test_waveform_size_cap_skips_artifact(app: AppContext) -> None:
     assert job.result.ok is True
     assert job.result.waveform is None
     assert any("max_waveform_bytes" in warning for warning in job.result.warnings)
+
+
+@pytest.mark.integration
+async def test_synthesis_uses_project_target(app: AppContext) -> None:
+    (app.workspace / "oss-cad-project.toml").write_text(
+        '[project]\ntop = "blinky"\nsources = ["rtl/blinky.sv"]\nlanguage = "systemverilog"\n'
+        '[target]\nfamily = "ice40"\n',
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_synthesize(app, job, timeout_s=120)
+
+    report = await _run(app, "synthesize", factory)
+    assert report.target == "ice40"
+    assert report.ok
+
+
+@pytest.mark.integration
+async def test_config_only_fpga_build(app: AppContext) -> None:
+    (app.workspace / "oss-cad-project.toml").write_text(
+        '[project]\ntop = "blinky"\nsources = ["rtl/blinky.sv"]\nlanguage = "systemverilog"\n'
+        '[target]\nboard = "icebreaker"\nfamily = "ice40"\ndevice = "up5k"\n'
+        'package = "sg48"\nfrequency_mhz = 48\nconstraints = ["pins.pcf"]\n',
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_fpga_build(app, job, timeout_s=180)
+
+    report = await _run(app, "fpga_build", factory, timeout=180)
+    assert report.ok
+    assert report.family == "ice40"
+    assert report.device == "up5k"
+    assert report.package == "sg48"
+    assert report.bitstream is not None
+
+
+@pytest.mark.integration
+async def test_allow_unconstrained_with_partial_constraints(app: AppContext) -> None:
+    (app.workspace / "pins_partial.pcf").write_text("set_io clk 35\nset_io rst 11\n", encoding="utf-8")
+
+    async def factory(job):
+        return await run_fpga_build(
+            app,
+            job,
+            source=SourceSet(files=["rtl/blinky.sv"], language="systemverilog"),
+            top="blinky",
+            board="icebreaker",
+            constraints=["pins_partial.pcf"],
+            allow_unconstrained=True,
+            frequency_mhz=48,
+            timeout_s=180,
+        )
+
+    report = await _run(app, "fpga_build", factory, timeout=180)
+    assert report.ok
+    assert report.bitstream is not None
+
+
+@pytest.mark.integration
+async def test_project_formal_defaults_are_applied(app: AppContext) -> None:
+    source = app.workspace / "formal.sv"
+    example = app.suite.root / "examples" / "quickstart" / "prove.sv"  # type: ignore[union-attr]
+    shutil.copyfile(example, source)
+    (app.workspace / "oss-cad-project.toml").write_text(
+        '[project]\ntop = "testbench"\nsources = ["formal.sv"]\nlanguage = "verilog"\n'
+        '[formal]\nmode = "cover"\ndepth = 5\nengine = "smtbmc"\n',
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_verify(
+            app,
+            job,
+            source=SourceSet(files=["formal.sv"], language="verilog"),
+            top="testbench",
+            timeout_s=120,
+        )
+
+    report = await _run(app, "verify", factory)
+    assert report.mode == "cover"
+    assert report.depth == 5
+
+
+@pytest.mark.integration
+async def test_multiple_constraints_are_rejected(app: AppContext) -> None:
+    (app.workspace / "pins2.pcf").write_text("set_io clk 35\n", encoding="utf-8")
+
+    async def factory(job):
+        return await run_fpga_build(
+            app,
+            job,
+            source=SourceSet(files=["rtl/blinky.sv"], language="systemverilog"),
+            top="blinky",
+            board="icebreaker",
+            constraints=["pins.pcf", "pins2.pcf"],
+            frequency_mhz=48,
+            timeout_s=120,
+        )
+
+    job = await app.jobs.execute("fpga_build", factory, timeout_s=120)
+    assert job.status == "failed"
+    assert job.error is not None
+    assert job.error.code == "invalid_input"
+    assert "one constraint" in job.error.message.lower()
+
+
+@pytest.mark.integration
+async def test_timing_failure_is_classified(app: AppContext) -> None:
+    async def factory(job):
+        return await run_fpga_build(
+            app,
+            job,
+            source=SourceSet(files=["rtl/blinky.sv"], language="systemverilog"),
+            top="blinky",
+            board="icebreaker",
+            constraints=["pins.pcf"],
+            frequency_mhz=200,
+            timeout_s=180,
+        )
+
+    job = await app.jobs.execute("fpga_build", factory, timeout_s=180)
+    report = job.result
+    assert report is not None
+    assert job.status == "failed"
+    assert job.error is not None
+    assert job.error.code == "timing_failed"
+    assert report.timing is not None
+    assert report.timing.met is False
+    assert report.timing_met is False
+
+
+@pytest.mark.integration
+async def test_eqy_runs_are_isolated(app: AppContext) -> None:
+    (app.workspace / "gold.v").write_text(
+        "module counter(input clk, output reg [3:0] q);\n  always @(posedge clk) q <= q + 1'b1;\nendmodule\n",
+        encoding="utf-8",
+    )
+    (app.workspace / "gate.v").write_text((app.workspace / "gold.v").read_text(), encoding="utf-8")
+    (app.workspace / "counter.eqy").write_text(
+        "[options]\n\n[strategy simple]\nuse sat\ndepth 5\n\n"
+        "[gold]\nread_verilog gold.v\nprep -top counter\n\n"
+        "[gate]\nread_verilog gate.v\nprep -top counter\n",
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_verify(
+            app,
+            job,
+            mode="equiv",
+            config_file="counter.eqy",
+            timeout_s=180,
+        )
+
+    first = await _run(app, "verify", factory, timeout=180)
+    second = await _run(app, "verify", factory, timeout=180)
+    assert first.ok and second.ok
+    assert first.log_tail and second.log_tail
+    assert not (app.workspace / "counter").exists()
+
+
+@pytest.mark.integration
+async def test_mcy_mutation_is_explicitly_unsupported(app: AppContext) -> None:
+    (app.workspace / "mutation.mcy").write_text("[options]\nsize 10\n", encoding="utf-8")
+
+    async def factory(job):
+        return await run_verify(app, job, mode="mutation", config_file="mutation.mcy", timeout_s=60)
+
+    job = await app.jobs.execute("verify", factory, timeout_s=60)
+    assert job.status == "failed"
+    assert job.error is not None
+    assert job.error.code == "not_supported"
+
+
+@pytest.mark.integration
+async def test_ghdl_analysis_diagnostics_are_reported(app: AppContext) -> None:
+    (app.workspace / "bad.vhd").write_text(
+        """\
+entity bad_syntax is
+    port (
+        clk : in std_logic;
+        q   : out std_logic
+    )
+end entity bad_syntax;
+""",
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_simulate(
+            app,
+            job,
+            source=SourceSet(files=["bad.vhd"], language="vhdl"),
+            top="bad_syntax",
+            engine="ghdl",
+            trace="none",
+            timeout_s=60,
+        )
+
+    job = await app.jobs.execute("simulate", factory, timeout_s=60)
+    report = job.result
+    assert report is not None
+    assert job.status == "failed"
+    assert report.diagnostics
+    assert any("missing" in diagnostic.message for diagnostic in report.diagnostics)
+    assert report.stderr_tail
+
+
+@pytest.mark.integration
+async def test_verilator_seed_is_passed_as_plusarg(app: AppContext) -> None:
+    (app.workspace / "tb_seed.v").write_text(
+        """\
+module tb_seed;
+    integer seed;
+    initial begin
+        if (!$value$plusargs("seed=%d", seed)) begin
+            seed = 1;
+        end
+        $display("SEED=%0d", seed);
+        $display("RANDOM=%0d", $random(seed));
+        $finish;
+    end
+endmodule
+""",
+        encoding="utf-8",
+    )
+
+    outputs: list[str] = []
+    for seed in (123, 456):
+
+        async def factory(job, seed=seed):
+            return await run_simulate(
+                app,
+                job,
+                source=SourceSet(files=["tb_seed.v"], language="verilog"),
+                top="tb_seed",
+                engine="verilator",
+                trace="none",
+                seed=seed,
+                timeout_s=120,
+            )
+
+        report = await _run(app, "simulate", factory)
+        outputs.append(report.stdout_tail)
+    assert "SEED=123" in outputs[0]
+    assert "SEED=456" in outputs[1]
+    assert outputs[0] != outputs[1]
+
+
+@pytest.mark.integration
+async def test_configless_simulation_prefers_testbench_for_dut(app: AppContext) -> None:
+    (app.workspace / "rtl" / "blinky.sv").unlink()
+    (app.workspace / "tb" / "tb_blinky.sv").unlink()
+    (app.workspace / "rtl" / "counter.v").write_text(
+        "module counter(input clk, output reg q);\n  always @(posedge clk) q <= ~q;\nendmodule\n",
+        encoding="utf-8",
+    )
+    (app.workspace / "tb" / "tb_aaa.v").write_text(
+        'module tb_aaa;\n  initial begin $display("TEST FAILED"); $finish; end\nendmodule\n',
+        encoding="utf-8",
+    )
+    (app.workspace / "tb" / "tb_counter.v").write_text(
+        "module tb_counter;\n"
+        "  reg clk = 0;\n  wire q;\n"
+        "  counter uut(.clk(clk), .q(q));\n"
+        "  always #5 clk = ~clk;\n"
+        '  initial begin #40 $display("TEST PASSED"); $finish; end\n'
+        "endmodule\n",
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_simulate(app, job, engine="iverilog", trace="none", timeout_s=60)
+
+    report = await _run(app, "simulate", factory)
+    assert report.top == "tb_counter"
+    assert report.ok
+
+
+@pytest.mark.integration
+async def test_elaborate_hierarchy_has_children(app: AppContext) -> None:
+    (app.workspace / "rtl" / "child.sv").write_text(
+        "module child(input logic a, output logic b); assign b = a; endmodule\n",
+        encoding="utf-8",
+    )
+    (app.workspace / "rtl" / "pipeline.sv").write_text(
+        "module pipeline(input logic a, output logic b);\n  child u_child(.a(a), .b(b));\nendmodule\n",
+        encoding="utf-8",
+    )
+
+    async def factory(job):
+        return await run_check(
+            app,
+            job,
+            source=SourceSet(files=["rtl/child.sv", "rtl/pipeline.sv"], language="systemverilog"),
+            top="pipeline",
+            level="elaborate",
+            engines=["slang"],
+            timeout_s=120,
+        )
+
+    report = await _run(app, "check", factory)
+    assert report.ok
+    assert len(report.hierarchy) == 1
+    root = report.hierarchy[0]
+    assert root.name == "pipeline"
+    assert [child.name for child in root.children] == ["u_child"]
+
+
+@pytest.mark.integration
+async def test_unsupported_synthesis_target_is_structured(app: AppContext) -> None:
+    async def factory(job):
+        return await run_synthesize(app, job, target="machxo2", timeout_s=60)
+
+    job = await app.jobs.execute("synthesize", factory, timeout_s=90)
+    assert job.status == "failed"
+    assert job.error is not None
+    assert job.error.code == "unsupported_target"
+    assert "machxo2" in job.error.message
+
+
+@pytest.mark.integration
+async def test_allow_timing_fail_returns_bitstream(app: AppContext) -> None:
+    async def factory(job):
+        return await run_fpga_build(
+            app,
+            job,
+            source=SourceSet(files=["rtl/blinky.sv"], language="systemverilog"),
+            top="blinky",
+            board="icebreaker",
+            constraints=["pins.pcf"],
+            frequency_mhz=200,
+            allow_timing_fail=True,
+            timeout_s=180,
+        )
+
+    job = await app.jobs.execute("fpga_build", factory, timeout_s=180)
+    report = job.result
+    assert report is not None
+    assert job.status == "failed"
+    assert job.error is not None
+    assert job.error.code == "timing_failed"
+    assert report.bitstream is not None
+    assert report.timing is not None
+    assert report.timing.met is False

@@ -7,15 +7,33 @@ import mimetypes
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 
+from oss_cad_mcp.errors import BinaryArtifact
 from oss_cad_mcp.exec.job_manager import Job
 from oss_cad_mcp.exec.paths import PathPolicy
 from oss_cad_mcp.models.common import ArtifactInfo
 
 
 class ArtifactStore:
+    _TEXT_MIME: ClassVar[set[str]] = {
+        "application/json",
+        "application/xml",
+        "application/x-yaml",
+        "application/x-vcd",
+        "application/toml",
+    }
+
     def __init__(self, paths: PathPolicy) -> None:
         self.paths = paths
+
+    @classmethod
+    def is_text_mime(cls, mime: str) -> bool:
+        return mime.startswith("text/") or mime in cls._TEXT_MIME
+
+    @staticmethod
+    def mime_type(path: Path) -> str:
+        return ArtifactStore._mime_type(path)
 
     def register(
         self,
@@ -56,6 +74,12 @@ class ArtifactStore:
         return self.paths.resolve_read(artifact.path)
 
     def read_text(self, artifact: ArtifactInfo, *, offset: int = 0, max_bytes: int = 65_536) -> tuple[str, bool, int]:
+        if not self.is_text_mime(artifact.mime_type):
+            raise BinaryArtifact(
+                f"Artifact {artifact.id} is {artifact.mime_type}, not a text file.",
+                hint="Use action='stat' or action='hash' for binary artifacts.",
+                details={"artifact_id": artifact.id, "size_bytes": artifact.size_bytes},
+            )
         path = self.resolve(artifact)
         total = path.stat().st_size
         with path.open("rb") as fh:

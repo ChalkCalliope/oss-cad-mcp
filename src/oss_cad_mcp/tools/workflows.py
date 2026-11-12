@@ -148,7 +148,7 @@ async def cad_synthesize(ctx: Context, request: SynthesizeRequest) -> SynthesisR
         return job.result
     return SynthesisReport(
         ok=False,
-        target=request.target,
+        target=request.target or "unknown",
         top=request.top,
         job=job.to_ref(),
         error=_job_error(job),
@@ -179,7 +179,7 @@ async def cad_verify(ctx: Context, request: VerifyRequest) -> VerificationReport
         return job.result
     return VerificationReport(
         ok=False,
-        mode=request.mode,
+        mode=request.mode or "unknown",
         job=job.to_ref(),
         error=_job_error(job),
         summary=_job_summary(job),
@@ -203,6 +203,7 @@ async def cad_fpga_build(ctx: Context, request: FpgaBuildRequest) -> FpgaBuildRe
             speed=request.speed,
             constraints=request.constraints,
             allow_unconstrained=request.allow_unconstrained,
+            allow_timing_fail=request.allow_timing_fail,
             frequency_mhz=request.frequency_mhz,
             seed=request.seed,
             placer=request.placer,
@@ -241,6 +242,7 @@ async def cad_waveform(ctx: Context, request: WaveformRequest) -> WaveformReport
             end=request.end,
             max_samples=request.max_samples,
             max_signals=request.max_signals,
+            allow_empty=request.allow_empty,
             output_format=request.output_format,
         )
 

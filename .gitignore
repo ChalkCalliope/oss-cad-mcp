@@ -1,5 +1,6 @@
 third-party
 internalDocs
+.superpowers/
 .venv
 __pycache__/
 *.py[cod]

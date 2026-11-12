@@ -98,6 +98,8 @@ def register_resources(mcp: MCPServer, get_app: Callable[[], AppContext | None])
         artifact = app.artifacts.find(job, artifact_id)
         if artifact is None:
             return f"unknown artifact: {artifact_id}"
+        if not app.artifacts.is_text_mime(artifact.mime_type):
+            return json.dumps(artifact.model_dump(mode="json"), indent=2)
         try:
             text, truncated, total = app.artifacts.read_text(artifact, max_bytes=65_536)
         except Exception as exc:

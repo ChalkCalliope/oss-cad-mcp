@@ -18,6 +18,18 @@ This first version deliberately focuses on **software flows**:
 **Hardware programming is disabled.** Tools such as `openFPGALoader`, `openocd`, `iceprog`,
 and `fujprog` are cataloged but not exposed as MCP actions.
 
+### Security model
+
+- All high-level workflow paths are confined to the workspace (plus the suite and cache
+  read roots). This includes every source glob, filelist entry, nested `-f` filelist,
+  `+incdir+`, and include directory.
+- `cad_tool_run` is **off by default** (`allow_raw = false`). Enable it only for trusted
+  projects. When enabled, path-like argv entries are checked against the writable roots;
+  absolute paths, `..` escapes, and embedded `-p "read_verilog /tmp/..."` paths are
+  rejected. This is a practical argv check, not a process sandbox.
+- `bwrap` is unavailable in the verified WSL2 environment, so raw tools run unsandboxed.
+  Treat RTL, testbenches, filelists, and raw argv as trusted input.
+
 ## Platform support
 
 | Platform | Status |
@@ -195,7 +207,7 @@ binaries open until the server is restarted.
 | `cad_artifact` | List, stat, read text, hash artifacts |
 | `cad_tool_search` | Search the full 155-binary catalog |
 | `cad_tool_help` | Curated help, version, examples, and risk notes |
-| `cad_tool_run` | Allowlisted raw suite binary escape hatch |
+| `cad_tool_run` | Allowlisted raw suite binary escape hatch (disabled by default) |
 
 `cad_check(level="parse")` stops at the front end where supported (`slang --parse-only`,
 GHDL `-s`); Verilator and Icarus still compile for parse-level checks. `cad_netlist`
@@ -300,6 +312,10 @@ std = "1800-2017"
 
 [target]
 board = "icebreaker"
+family = "ice40"
+device = "up5k"
+package = "sg48"
+speed = "6"
 frequency_mhz = 48
 constraints = ["pins.pcf"]
 
@@ -312,12 +328,26 @@ trace = "auto"
 engine = "smtbmc"
 depth = 20
 mode = "prove"
+top = "top_formal"
+sources = ["formal/top_formal.sv", "rtl/top.sv"]
 ```
 
 Supported board presets in v0.1 include iCEBreaker, TinyFPGA BX, iCEstick, ULX3S 45F/85F,
-and the ECP5 evaluation board. Presets only supply device/package/speed and frequency;
-users provide pin constraints. For early bring-up, `allow_unconstrained=true` passes the
-architecture-specific “allow unconstrained I/O” option to nextpnr.
+and the ECP5 evaluation board. Target values are resolved with explicit precedence:
+request fields > project `[target]` fields > board preset defaults > built-in defaults.
+A request `board` is authoritative and does not mix in an incompatible project target.
+For early bring-up, `allow_unconstrained=true` always passes the architecture-specific
+“allow unconstrained I/O” option to nextpnr, even when a constraint file is present.
+
+`constraints` accepts one PCF/LPF per build. Passing multiple files is rejected; merge
+them first. Project `[formal]` settings supply defaults for `cad_verify`; `formal.top` and
+`formal.sources` make a formal harness fully config-driven. `cad_synthesize` uses
+`[target].family` when the request omits `target`.
+
+VHDL files are compiled in lexicographic order by `resolve_sources()`; name package files
+so they sort before the entities that depend on them (for example `01_pkg.vhd`,
+`02_entity.vhd`). Header files (`.vh`, `.svh`) are listed as HDL files but are not treated
+as compilation units or top candidates.
 
 ## Configuration
 
@@ -328,7 +358,8 @@ environment variables, and CLI options (CLI > env > TOML > defaults).
 suite_root = "/home/you/Kits/oss-cad-suite"
 workspace = "/home/you/projects/blinky"
 profile = "core"
-allow_raw = true
+# Raw execution is opt-in; only use it with trusted projects.
+allow_raw = false
 allow_unsafe = false
 max_jobs = 4
 default_timeout_s = 300
@@ -369,11 +400,30 @@ Generated files go to `build/`; job state and logs go to `.oss-cad-mcp/runs/`.
 - No FPGA programming or hardware debug.
 - No cocotb, UVM, or mixed-language simulation workflows.
 - Gowin/Nexus/GateMate/MachXO2 build adapters are not yet verified; use
-  `cad_synthesize` plus `cad_tool_run` for those targets.
-- EQY/MCY require an existing configuration file.
-- GHW waveform analysis is not supported; ask GHDL for VCD.
+  `cad_synthesize` plus `cad_tool_run` for those targets. Unsupported Yosys targets
+  are preflighted and return `unsupported_target`.
+- EQY requires an existing `.eqy` configuration file. `cad_verify(mode="mutation")`
+  returns `not_supported` in v0.1; run `mcy init`/`run` through `cad_tool_run` if needed.
+- GHW waveform analysis is not supported; ask GHDL for VCD. `cad_artifact(read_text)`
+  rejects binary artifacts; use `stat`/`hash` for bitstreams.
+- GHDL `-s` (parse level) still performs some semantic checks; do not assume it is purely
+  syntactic.
+- `cad_verify(mode="cover")` fails when any cover is unreachable. Use `prove`/`bmc` for
+  property checks and read the reported cover statuses separately.
+- Timing-failed nextpnr builds are reported as `timing_failed`, not `pnr_failed`. A
+  bitstream produced with `allow_timing_fail=true` is not trustworthy for hardware.
+- `cad_job(action="rerun")` is not implemented; re-submit the original workflow.
 - macOS and native Linux are not verified for full support.
 - Simulation executes project code. Treat RTL/testbenches as trusted input.
+
+### Seed contract
+
+`cad_simulate(seed=N)` passes `+seed=N` to Icarus and Verilator testbenches (matching
+`$value$plusargs("seed=%d", ...)`), and additionally passes `+verilator+seed+N` for
+Verilator's runtime RNG. If `plusargs` already contains `+seed=`, the explicit plusarg
+wins and the `seed` field is ignored with a warning. GHDL has no standard plusarg
+equivalent; `seed` is ignored with a warning. Repeated runs with the same engine and seed
+are deterministic.
 
 ## Development
 

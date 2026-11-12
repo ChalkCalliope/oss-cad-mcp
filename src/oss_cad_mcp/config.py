@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     suite_root: Path | None = None
     workspace: Path = Field(default_factory=Path.cwd)
     profile: Literal["core", "standard", "full"] = "core"
-    allow_raw: bool = True
+    allow_raw: bool = False
     allow_unsafe: bool = False
     max_jobs: int = Field(default=4, ge=1, le=64)
     default_timeout_s: float = Field(default=300.0, gt=0, le=86_400)

@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from oss_cad_mcp.errors import ToolNotFound
 from oss_cad_mcp.models.common import Risk, ToolHelp, ToolInfo
-from oss_cad_mcp.suite import Suite
+from oss_cad_mcp.suite import Suite, _valid_version_line
 
 _FAMILY_BY_PREFIX = {
     "nextpnr": "pnr",
@@ -68,6 +68,23 @@ def _risk_default(family: str, name: str, suite: Suite) -> Risk:
     if family in {"pnr", "waveform"}:
         return "writes_files"
     return "writes_files"
+
+
+def _extract_usage(help_text: str | None) -> str | None:
+    if not help_text:
+        return None
+    lines = help_text.splitlines()
+    for index, line in enumerate(lines):
+        match = re.match(r"^\s*(?:usage|synopsis)\s*:?\s*(.*)$", line, re.IGNORECASE)
+        if not match:
+            continue
+        inline = match.group(1).strip()
+        if inline:
+            return line.strip()
+        for next_line in lines[index + 1 :]:
+            if next_line.strip():
+                return next_line.strip()
+    return None
 
 
 def _recommended_default(family: str) -> str:
@@ -281,14 +298,7 @@ class Catalog:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(help_text, encoding="utf-8")
         version = await asyncio.to_thread(self.version, name)
-        usage = None
-        for line in (help_text or "").splitlines():
-            stripped = line.strip()
-            if stripped.lower().startswith("usage:"):
-                usage = stripped
-                break
-        if usage is None and help_text:
-            usage = next((line.strip() for line in help_text.splitlines() if line.strip()), None)
+        usage = _extract_usage(help_text)
         if entry.hardware:
             notes.append("Hardware tools are catalog-only in v0.1; programming is disabled.")
         if entry.gui:
@@ -330,7 +340,12 @@ class Catalog:
         except OSError, json.JSONDecodeError:
             return
         if isinstance(data, dict):
-            self._versions.update({str(key): (str(value) if value else None) for key, value in data.items()})
+            self._versions.update(
+                {
+                    str(key): (str(value) if value and _valid_version_line(str(value)) is not None else None)
+                    for key, value in data.items()
+                }
+            )
 
     def save_version_cache(self) -> None:
         path = self.cache_dir / "versions" / f"{self.suite.version}.json"

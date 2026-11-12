@@ -10,7 +10,7 @@ from mcp.server.mcpserver import Context
 
 from oss_cad_mcp import API_VERSION, __version__
 from oss_cad_mcp.app import AppContext
-from oss_cad_mcp.errors import CadError, PathNotAllowed, ToolNotFound
+from oss_cad_mcp.errors import CadError, PathNotAllowed, SuiteNotFound, ToolNotFound
 from oss_cad_mcp.models.common import (
     CapabilityReport,
     ErrorInfo,
@@ -236,13 +236,31 @@ async def cad_project(ctx: Context, request: ProjectRequest) -> ProjectActionRep
             ),
             summary="Project initialization was not authorized.",
         )
-    config_path = root / "oss-cad-project.toml"
+
+    def _root_relative(value: str) -> str:
+        path = app.paths.resolve_read(value, must_exist=True)
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            return path.as_posix()
+
+    try:
+        config_path = app.paths.resolve_write(root / "oss-cad-project.toml")
+    except Exception as exc:
+        return ProjectActionReport(
+            ok=False,
+            action=request.action,
+            profile=profile,
+            path=app.paths.display(root),
+            error=_error(exc),
+            summary="Project configuration path is not writable.",
+        )
     payload: dict[str, Any] = {
         "project": {
             "name": root.name,
             "top": profile.top_candidates[0] if profile.top_candidates else None,
-            "sources": (profile.source_files or profile.hdl_files)[:200],
-            "testbenches": profile.testbench_files,
+            "sources": [_root_relative(item) for item in (profile.source_files or profile.hdl_files)[:200]],
+            "testbenches": [_root_relative(item) for item in profile.testbench_files],
             "include_dirs": [],
             "defines": {},
             "language": "auto",
@@ -256,7 +274,17 @@ async def cad_project(ctx: Context, request: ProjectRequest) -> ProjectActionRep
         "formal": {"engine": "smtbmc", "depth": 20, "mode": "prove"},
     }
     payload["project"] = {key: value for key, value in payload["project"].items() if value is not None}
-    config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    try:
+        config_path.write_text(tomli_w.dumps(payload), encoding="utf-8")
+    except OSError as exc:
+        return ProjectActionReport(
+            ok=False,
+            action=request.action,
+            profile=profile,
+            path=app.paths.display(config_path),
+            error=ErrorInfo(code="write_failed", message=f"Could not write project configuration: {exc}"),
+            summary="Project configuration could not be written.",
+        )
     return ProjectActionReport(
         ok=True,
         action=request.action,
@@ -270,7 +298,10 @@ async def cad_project(ctx: Context, request: ProjectRequest) -> ProjectActionRep
 async def cad_tool_search(ctx: Context, request: ToolSearchRequest) -> ToolSearchResult:
     """Search the complete OSS CAD Suite catalog, including tools not exposed as workflows."""
     app = get_app(ctx)
-    registry = app.require_registry()
+    try:
+        registry = app.require_registry()
+    except SuiteNotFound as exc:
+        return ToolSearchResult(ok=False, query=request.query, error=exc.to_info())
     entries = registry.search(
         request.query,
         family=request.family,
@@ -290,7 +321,19 @@ async def cad_tool_help(ctx: Context, request: ToolHelpRequest) -> ToolHelp:
     """Show curated help, version, examples, and risk notes for a suite tool."""
     app = get_app(ctx)
     try:
-        return await app.require_registry().help(request.tool)
+        registry = app.require_registry()
+    except SuiteNotFound as exc:
+        return ToolHelp(
+            tool=request.tool,
+            summary="OSS CAD Suite is not available.",
+            binary=request.tool,
+            risk="read_only",
+            ok=False,
+            error=exc.to_info(),
+            notes=["Run cad_status to inspect suite discovery, or set OSS_CAD_SUITE_ROOT."],
+        )
+    try:
+        return await registry.help(request.tool)
     except ToolNotFound as exc:
         return ToolHelp(
             tool=request.tool,
@@ -319,7 +362,17 @@ async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
             error=error,
             summary="Raw tool execution is disabled.",
         )
-    registry = app.require_registry()
+    try:
+        registry = app.require_registry()
+    except SuiteNotFound as exc:
+        error = exc.to_info()
+        return ToolRunReport(
+            ok=False,
+            tool=request.tool,
+            job=_blocked_job(app, summary="OSS CAD Suite is not available.", error=error),
+            error=error,
+            summary="OSS CAD Suite is not available.",
+        )
     try:
         entry = registry.get(request.tool)
     except ToolNotFound as exc:
@@ -389,7 +442,7 @@ async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
     cwd = app.workspace
     if request.cwd:
         try:
-            cwd = app.paths.resolve_read(request.cwd, must_exist=True)
+            cwd = app.paths.resolve_write(request.cwd)
         except PathNotAllowed as exc:
             error = exc.to_info()
             return ToolRunReport(
@@ -408,6 +461,17 @@ async def cad_tool_run(ctx: Context, request: ToolRunRequest) -> ToolRunReport:
                 error=error,
                 summary="Invalid working directory.",
             )
+    try:
+        app.paths.validate_argv_paths(request.args, cwd=cwd)
+    except PathNotAllowed as exc:
+        error = exc.to_info()
+        return ToolRunReport(
+            ok=False,
+            tool=entry.name,
+            job=_blocked_job(app, summary="Raw tool path is outside the workspace.", error=error),
+            error=error,
+            summary="Raw tool path is outside the workspace.",
+        )
 
     async def run(job):
         suite = app.require_suite()
